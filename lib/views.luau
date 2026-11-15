@@ -1,0 +1,199 @@
+--!strict
+-- Views shared by the lenses and the launches block. Field names follow the
+-- token API (api-service public/api/responses): lists are {items, paging}.
+
+local ui = tern.ui
+local M = {}
+
+local APP = "https://app.qualflare.com"
+
+-- The dashboard slug for a `qf` identifier: the `slugs` setting, else the
+-- identifier itself (the CLI README suggests naming it after the slug).
+function M.slug(identifier: string): string
+	local map = tern.kv.get("slugs")
+	if type(map) == "table" and type(map[identifier]) == "string" then
+		return map[identifier]
+	end
+	return identifier
+end
+
+function M.launch_url(identifier: string, seq: any): string
+	return `{APP}/project/{M.slug(identifier)}/launches?p=launch&p.seq={seq}`
+end
+
+function M.cluster_url(identifier: string, id: any): string
+	return `{APP}/project/{M.slug(identifier)}/clusters/{id}`
+end
+
+function M.defect_url(identifier: string, seq: any): string
+	return `{APP}/project/{M.slug(identifier)}/defects?p=defect&p.seq={seq}`
+end
+
+function M.project_url(identifier: string, page: string?): string
+	return `{APP}/project/{M.slug(identifier)}/{page or "launches"}`
+end
+
+local STATUS_TONE: { [string]: string } = {
+	passed = "success",
+	failed = "error",
+	error = "error",
+	timeout = "error",
+	aborted = "warning",
+	skipped = "muted",
+	pending = "info",
+	draft = "muted",
+	-- clusters
+	analysed = "success",
+	-- severities
+	critical = "error",
+	high = "error",
+	medium = "warning",
+	low = "muted",
+}
+
+local function str(v: any): string
+	if v == nil or v == tern.json.null then
+		return ""
+	end
+	return tostring(v)
+end
+
+local function num(v: any): number
+	return if type(v) == "number" then v else 0
+end
+
+-- "2026-11-15T14:32:10Z" -> "2026-11-15 14:32"
+function M.when(ts: any): string
+	local s = str(ts)
+	local d, t = string.match(s, "^(%d%d%d%d%-%d%d%-%d%d)T(%d%d:%d%d)")
+	return if d then `{d} {t}` else s
+end
+
+function M.badge(status: any): BadgeCell
+	local s = str(status)
+	return { badge = { text = s, tone = STATUS_TONE[s] or "muted" } }
+end
+
+export type Items = { any }
+
+-- `{items = [...]}` (list endpoints) or a bare array.
+function M.items(data: any): Items?
+	if type(data) ~= "table" then
+		return nil
+	end
+	if type(data.items) == "table" then
+		return data.items
+	end
+	if data[1] ~= nil then
+		return data
+	end
+	return nil
+end
+
+function M.launches_table(items: Items, opts: { selected: string?, max: number? }?): Node
+	local cols: { Col } = {
+		{ id = "seq", head = "#", mono = true, align = "end" },
+		{ id = "status", head = "Status" },
+		{ id = "pass", head = "Pass rate", grow = 1 },
+		{ id = "counts", head = "Passed / failed / skipped", mono = true, priority = -1 },
+		{ id = "env", head = "Environment", priority = -2 },
+		{ id = "branch", head = "Branch", mono = true, priority = -3, truncate = "middle" },
+		{ id = "created", head = "Created", mono = true, priority = -1 },
+		{ id = "open", head = "" },
+	}
+	local rows: { TableRow } = {}
+	local max = if opts and opts.max then opts.max else 200
+	for i, l in items do
+		if i > max then
+			break
+		end
+		local total = num(l.totalCount)
+		local passed = num(l.passedCount)
+		local failed = num(l.failedCount) + num(l.errorCount) + num(l.timeoutCount)
+		local rate = if total > 0 then passed / total else 0
+		table.insert(rows, {
+			id = "launch=" .. str(l.seq),
+			cells = ({
+				"#" .. str(l.seq),
+				M.badge(l.status),
+				ui.meter_cell(rate),
+				`{passed} / {failed} / {num(l.skippedCount)}`,
+				str(l.environmentName),
+				str(l.branch),
+				M.when(l.createdAt),
+				{ button = { text = "", icon = "open", act = "launch=" .. str(l.seq) } },
+			} :: { Cell }),
+		})
+	end
+	local out = ui.table(cols, rows, {
+		selectable = true,
+		selected = if opts then opts.selected else nil,
+		empty = "No launches yet. Upload results with qf <id> collect.",
+	})
+	if #items > max then
+		return ui.col({ out, ui.overflow(#items - max) })
+	end
+	return out
+end
+
+function M.clusters_table(items: Items): Node
+	local cols: { Col } = {
+		{ id = "severity", head = "Severity" },
+		{ id = "label", head = "Failure", grow = 1 },
+		{ id = "count", head = "Failures", mono = true, align = "end" },
+		{ id = "last", head = "Last seen", mono = true, priority = -1 },
+		{ id = "open", head = "" },
+	}
+	local rows: { TableRow } = {}
+	for _, c in items do
+		table.insert(rows, {
+			id = "cluster=" .. str(c.id),
+			title = str(c.summary),
+			cells = ({
+				M.badge(c.severity),
+				str(c.label),
+				str(c.failureCount),
+				M.when(c.lastSeenAt),
+				{ button = { text = "", icon = "open", act = "cluster=" .. str(c.id) } },
+			} :: { Cell }),
+		})
+	end
+	return ui.table(cols, rows, { selectable = true, empty = "No failure clusters." })
+end
+
+function M.defects_table(items: Items): Node
+	local cols: { Col } = {
+		{ id = "seq", head = "#", mono = true, align = "end" },
+		{ id = "severity", head = "Severity" },
+		{ id = "title", head = "Title", grow = 1 },
+		{ id = "status", head = "Status" },
+		{ id = "open", head = "" },
+	}
+	local rows: { TableRow } = {}
+	for _, d in items do
+		table.insert(rows, {
+			id = "defect=" .. str(d.seq),
+			cells = ({
+				"#" .. str(d.seq),
+				M.badge(d.severity),
+				str(d.title or d.name),
+				M.badge(d.status),
+				{ button = { text = "", icon = "open", act = "defect=" .. str(d.seq) } },
+			} :: { Cell }),
+		})
+	end
+	return ui.table(cols, rows, { selectable = true, empty = "No defects." })
+end
+
+-- Stat tiles for the newest launch.
+function M.latest_stats(l: any): Node
+	local failed = num(l.failedCount) + num(l.errorCount) + num(l.timeoutCount)
+	return ui.stats({
+		{ label = "Latest launch", value = "#" .. str(l.seq), sub = M.when(l.createdAt) },
+		{ label = "Passed", value = str(num(l.passedCount)), tone = "success" },
+		{ label = "Failed", value = str(failed), tone = if failed > 0 then "error" else nil },
+		{ label = "Flaky", value = str(num(l.flakyCount)), tone = if num(l.flakyCount) > 0 then "warning" else nil },
+	})
+end
+
+return M

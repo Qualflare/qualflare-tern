@@ -1,0 +1,26 @@
+schema = 1
+id = "qualflare"
+name = "Qualflare"
+version = "0.1.0"
+description = "Upload test results to Qualflare from the terminal, and see launches and failures as native views."
+icon = "list-checks"
+host = "host.luau"
+window = "window.luau"
+
+[[blocks]]
+id = "launches"
+title = "Qualflare launches"
+icon = "list-checks"
+
+# Narrow to broad: the first matching lens wins.
+[[lenses]]
+id = "collect"
+match = ["qf * collect", "qf * collect *"]
+
+[[lenses]]
+id = "list"
+match = [
+	"qf * launches list", "qf * launches list *",
+	"qf * clusters list", "qf * clusters list *",
+	"qf * defects list", "qf * defects list *",
+]
