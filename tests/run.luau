@@ -352,13 +352,13 @@ test("window registers commands and Carly exports", function()
 	assert(S.exports.launches and S.exports.clusters and S.exports.project, "exports")
 end)
 
-test("Show launches opens the block for the focused project", function()
+test("Show launches opens the block in a pane beside the focused one", function()
 	S.panes = { { pane = 3, cwd = "/w/repo/packages/web", title = "" } }
 	local cx = S.window_cx(3)
 	S.commands.launches.run(cx)
 	eq(cx.blocks[1][1], "qualflare.launches")
 	eq(cx.blocks[1][2][1], "acme-web")
-	eq(cx.blocks[1][3], "tab")
+	eq(cx.blocks[1][3], "beside")
 end)
 
 test("Fix with omp starts an agent on qf-fix at the project root", function()

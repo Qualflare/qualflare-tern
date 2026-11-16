@@ -18,27 +18,27 @@ Both halves are included: `host.luau` runs in Tern's session daemon, `window.lua
 - `qf <id> collect …` shows a result card: uploaded, not logged in, plan limit, retry. It also shows skipped attachments and an *Open launches* button.
 - `qf <id> launches list`, `clusters list` and `defects list` show a table instead of JSON. Double-click a row, or press its open button, to see it in the dashboard. The *Raw* toggle shows the JSON.
 
-**Qualflare tab.** *Qualflare: Show launches* opens a Qualflare tab for the focused pane's project:
+**Qualflare pane.** *Qualflare: Show launches* opens a Qualflare pane beside the focused one, for that pane's project:
 - the latest launch's pass rate, failures, flaky tests and age;
 - the recent launches;
 - for the selected launch, its numbers and Qualflare's AI summary (risk, failing areas, recommendations).
 
-*Open on website* shows the launch's test results in the dashboard. *Fix with omp* starts omp on a failed launch. *Upload* types `qf <id> collect …` into a terminal of the project. A menu at the top switches between the projects you're logged in to (`qf projects`). The tab refreshes every minute.
+*Open on website* shows the launch's test results in the dashboard. *Fix with omp* starts omp on a failed launch. *Upload* types `qf <id> collect …` into a terminal of the project. A menu at the top switches between the projects you're logged in to (`qf projects`). The pane refreshes every minute.
 
 Keys: `↑`/`↓` select, `⏎` open on website, `r` refresh, `u` upload, `p` project.
 
-Clicking a dashboard launch link (`https://app.qualflare.com/project/<slug>/launches?…p.seq=<n>`) in a terminal opens the tab on that launch, when you're logged in to that project. Turn this off with *Qualflare: Toggle opening Qualflare links in Tern*.
+Clicking a dashboard launch link (`https://app.qualflare.com/project/<slug>/launches?…p.seq=<n>`) in a terminal opens the Qualflare pane on that launch, when you're logged in to that project. Turn this off with *Qualflare: Toggle opening Qualflare links in Tern*.
 
 **Palette commands.**
 
 | Command | What it does |
 |---|---|
-| *Qualflare: Show launches* | Opens the Qualflare tab for the focused pane's project |
+| *Qualflare: Show launches* | Opens the Qualflare pane beside the focused pane, for its project |
 | *Qualflare: Upload test results* | Types `qf <id> collect <report folder>` into the focused pane |
 | *Qualflare: Open dashboard* | Opens the project in the browser |
 | *Qualflare: Fix failing tests with omp* | Starts an omp agent on `/skill:qf-fix` (needs the Qualflare plugin in omp) |
 | *Qualflare: Toggle upload prompt after tests* | Turns the upload prompt on or off |
-| *Qualflare: Toggle opening Qualflare links in Tern* | Dashboard launch links open in the tab, or in the browser |
+| *Qualflare: Toggle opening Qualflare links in Tern* | Dashboard launch links open in the Qualflare pane, or in the browser |
 
 **Status widget.** *Qualflare upload* shows the last `qf collect` result. Add it from the palette with *Edit widgets…*.
 
@@ -54,7 +54,7 @@ Settings live in the plugin's `kv.json` (`<state>/plugin-data/qualflare/`):
 | `qf_path` | found on `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/go/bin` | The `qf` executable |
 | `report_dirs` | `[]` | More report folders to watch, relative to the package |
 | `slugs` | `{}` | Dashboard slug per `qf` identifier, when they differ (`{"web": "acme-web"}`) |
-| `route_links` | `true` | Open dashboard launch links clicked in terminals in the Qualflare tab |
+| `route_links` | `true` | Open dashboard launch links clicked in terminals in the Qualflare pane |
 
 ## Development
 

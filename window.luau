@@ -32,7 +32,7 @@ tern.command({
 	run = function(cx: WindowCx)
 		local proj = focused_project(cx)
 		local args = if proj then { proj.package.identifier } else nil
-		cx:new_block("qualflare.launches", args, "tab")
+		cx:new_block("qualflare.launches", args, "beside")
 	end,
 })
 
