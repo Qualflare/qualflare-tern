@@ -51,10 +51,11 @@ The answers decide two fallbacks later tasks use. **Ask the owner before startin
 - [ ] **Step 5:** Remove every `-- SPIKE` line, run the type check and tests (both clean, same counts as before), and kill the temp session.
 - [ ] **Step 6:** Fill in "Spike results" below and commit only the plan change: `docs: spike results for the Qualflare tab`.
 
-**Spike results** (fill in):
-- Bridge `qualflare-tern:` reaches `route.link` from a host block: yes / no. **If no:** the *Fix with omp* button is dropped from the card (the palette command stays), and *Upload* uses `tern.pane.write` from the host to the most recent pane from `tern.pane.list()` whose `cwd` is under the project root and whose `program` is a shell (`zsh`, `bash`, `fish`, `sh`). With no such pane it toasts "Open a terminal in <root> to upload".
-- `cx:open(url, "tab")` in the window opens: Tern browser / system browser. *Open on website* uses that from the bridge (`qualflare-tern:open?url=<escaped>`) if it gives Tern's browser, else plain `cx:open(url)` from the host.
-- `os.time()` available in the host: yes / no. **If no:** each refresh also runs `date -u +%s` through `tern.process.run` and stores the result as `state.now`.
+**Spike results** (2026-11-16, temp session `qfspike`, killed afterwards):
+- Bridge: **yes**. `cx:open("qualflare-tern:ping?id=x")` from the block's `init` reached the window's `tern.route.link` with `link.pane` = the block's pane and `kind = "plugin"`; `{ handled = true }` stopped it there. *Fix with omp* and *Upload* stay in the card and the head row.
+- `cx:open("https://…", "tab")` from the window opened **no Tern browser pane** (`tern browser {"op":"blocks"}` empty; no new tab): it goes to Tern's normal link handling (the system browser by default). Tern's browser is reachable only through `cx.browser:call{op="open"}` automation, a driven picture-in-picture that may not carry the user's website login. Decision: *Open on website* is a plain `cx:open(url)` from the host, which goes through the link route (passed on because the pane kind is `plugin`) and then Tern's own link handling, following the user's Tern setting. No `open` bridge action.
+- `os.time()` in the host: **yes** (`1794855487`). `state.now = os.time()` at render and refresh time.
+- Not exercised: a click on a link in a terminal pane (needs a person to click). The `kind == "terminal"` check rests on the `LinkRequest`/`PaneInfo` types and is covered by unit tests; Task 6's live check clicks one.
 
 ---
 
