@@ -74,7 +74,7 @@ function M.parse_bridge(url: string): (string?, { [string]: string })
 		return nil, params
 	end
 	for k, v in string.gmatch(query :: string, "([^&=]+)=([^&]*)") do
-		params[decode(k)] = decode(v)
+		params[decode(k :: string)] = decode(v :: string)
 	end
 	return action, params
 end
