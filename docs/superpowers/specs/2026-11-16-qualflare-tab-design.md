@@ -1,6 +1,11 @@
 # Qualflare tab: design
 
-Date: 2026-11-16. Status: awaiting approval.
+Date: 2026-11-16. Status: implemented (plan `docs/superpowers/plans/2026-11-16-qualflare-tab.md`).
+
+Changes from the design, decided while building:
+- *Open on website* opens the launch through Tern's normal link handling (the system browser by default). Plugins can't open Tern's own browser as a normal tab, only as a driven picture-in-picture that may not carry the website login.
+- The link route maps a slug using the projects `qf projects` listed when a tab last opened, plus the project of the pane that was clicked.
+- *Upload* from the tab types into a terminal pane at its prompt inside the project. With none open, it says to open one.
 
 ## Intent
 
