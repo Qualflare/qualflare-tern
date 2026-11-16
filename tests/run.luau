@@ -358,6 +358,7 @@ test("Show launches opens the block for the focused project", function()
 	S.commands.launches.run(cx)
 	eq(cx.blocks[1][1], "qualflare.launches")
 	eq(cx.blocks[1][2][1], "acme-web")
+	eq(cx.blocks[1][3], "tab")
 end)
 
 test("Fix with omp starts an agent on qf-fix at the project root", function()
@@ -366,6 +367,72 @@ test("Fix with omp starts an agent on qf-fix at the project root", function()
 	eq(S.runs[1][1], "agent")
 	eq(S.runs[1][2], "/skill:qf-fix")
 	eq(S.runs[1][3], "/w/repo")
+end)
+
+test("route opens launch links from terminals in the tab", function()
+	S.kv.known_identifiers = { "demo-app" }
+	S.panes = { { pane = 1, kind = "terminal", cwd = "/w/repo", title = "" } }
+	local d = S.routes[1]({ url = "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=42", pane = 1, mods = {} }, S.window_cx(1))
+	eq(d.block, "qualflare.launches")
+	eq(d.args[1], "demo-app")
+	eq(d.args[2], "42")
+end)
+
+test("route knows the focused pane's project without qf projects", function()
+	S.kv.known_identifiers = nil
+	S.files["/w/repo/.qualflare/test-state.md"] = STATE
+	S.panes = { { pane = 1, kind = "terminal", cwd = "/w/repo/packages/web", title = "" } }
+	local d = S.routes[1]({ url = "https://app.qualflare.com/project/acme-web/launches?p=launch&p.seq=3", pane = 1, mods = {} }, S.window_cx(1))
+	eq(d.args[1], "acme-web")
+end)
+
+test("route ignores links from non-terminal panes", function()
+	S.kv.known_identifiers = { "demo-app" }
+	S.panes = { { pane = 2, kind = "plugin", cwd = "", title = "" } }
+	eq(S.routes[1]({ url = "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=42", pane = 2, mods = {} }, S.window_cx(2)), nil)
+end)
+
+test("route passes links for unknown slugs", function()
+	S.kv.known_identifiers = { "demo-app" }
+	S.panes = { { pane = 1, kind = "terminal", cwd = "/elsewhere", title = "" } }
+	eq(S.routes[1]({ url = "https://app.qualflare.com/project/other/launches?p=launch&p.seq=1", pane = 1, mods = {} }, S.window_cx(1)), nil)
+end)
+
+test("route_links=false passes every Qualflare link", function()
+	S.kv.known_identifiers = { "demo-app" }
+	S.kv.route_links = false
+	S.panes = { { pane = 1, kind = "terminal", cwd = "/w/repo", title = "" } }
+	eq(S.routes[1]({ url = "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=42", pane = 1, mods = {} }, S.window_cx(1)), nil)
+	S.kv.route_links = nil
+end)
+
+test("bridge fix starts omp at the project root; upload types into a terminal", function()
+	S.files["/w/repo/.qualflare/test-state.md"] = STATE
+	S.files["/w/repo/qualflare-results/.keep"] = ""
+	S.panes = { { pane = 3, kind = "plugin", cwd = "", title = "" } }
+	local cx = S.window_cx(3)
+	local d = S.routes[1]({ url = "qualflare-tern:fix?id=demo-app&root=%2Fw%2Frepo", pane = 3, mods = {} }, cx)
+	eq(d.handled, true)
+	local r = S.runs[#S.runs]
+	eq(r[2], "/skill:qf-fix")
+	eq(r[3], "/w/repo")
+	S.panes = {
+		{ pane = 3, kind = "plugin", cwd = "", title = "" },
+		{ pane = 5, kind = "terminal", cwd = "/elsewhere", title = "", at_prompt = true },
+		{ pane = 4, kind = "terminal", cwd = "/w/repo", title = "", at_prompt = true },
+	}
+	S.routes[1]({ url = "qualflare-tern:upload?id=demo-app&root=%2Fw%2Frepo", pane = 3, mods = {} }, cx)
+	eq(S.writes[#S.writes].pane, 4)
+	has(S.writes[#S.writes].text, "qf demo-app collect qualflare-results")
+end)
+
+test("bridge upload with no terminal in the project says where to open one", function()
+	S.files["/w/repo/.qualflare/test-state.md"] = STATE
+	S.files["/w/repo/qualflare-results/.keep"] = ""
+	S.panes = { { pane = 3, kind = "plugin", cwd = "", title = "" } }
+	S.routes[1]({ url = "qualflare-tern:upload?id=demo-app&root=%2Fw%2Frepo", pane = 3, mods = {} }, S.window_cx(3))
+	eq(#S.writes, 0)
+	has(S.toasts[#S.toasts][2], "Open a terminal in /w/repo")
 end)
 
 ---------------------------------------------------------------------------

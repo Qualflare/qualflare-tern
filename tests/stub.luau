@@ -11,6 +11,7 @@ local S = {
 	widgets = {} :: { [string]: any },
 	commands = {} :: { [string]: any },
 	exports = {} :: { [string]: any },
+	routes = {} :: { any },
 	writes = {} :: { { pane: number, text: string } },
 	toasts = {} :: { { string } },
 	opened = {} :: { string },
@@ -124,6 +125,9 @@ local function window_cx(focused: number?)
 		focused = function(_)
 			return focused
 		end,
+		panes = function(_)
+			return S.panes
+		end,
 		pane = function(_, p)
 			for _, info in S.panes do
 				if info.pane == p then
@@ -139,8 +143,8 @@ local function window_cx(focused: number?)
 			return 99
 		end,
 	}
-	function cx:new_block(kind, args, _how)
-		table.insert(self.blocks, { kind, args })
+	function cx:new_block(kind, args, how)
+		table.insert(self.blocks, { kind, args, how })
 		return 77
 	end
 	function cx:run(pane, text)
@@ -240,6 +244,12 @@ tern = {
 		end,
 		refresh = function() end,
 		status = function() end,
+	},
+	route = {
+		link = function(fn)
+			table.insert(S.routes, fn)
+		end,
+		open = function(_fn) end,
 	},
 	command = function(def)
 		S.commands[def.id] = def

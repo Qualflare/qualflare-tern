@@ -2,6 +2,7 @@
 -- Window half: palette commands, Carly exports, and the omp hand-off.
 
 local detect = require("./lib/detect")
+local links = require("./lib/links")
 local project = require("./lib/project")
 local qf = require("./lib/qf")
 local views = require("./lib/views")
@@ -31,9 +32,74 @@ tern.command({
 	run = function(cx: WindowCx)
 		local proj = focused_project(cx)
 		local args = if proj then { proj.package.identifier } else nil
-		cx:new_block("qualflare.launches", args, "split")
+		cx:new_block("qualflare.launches", args, "tab")
 	end,
 })
+
+local function under(path: string, root: string): boolean
+	return path == root or string.sub(path, 1, #root + 1) == root .. "/"
+end
+
+-- A terminal pane at its prompt inside `root`: the focused one if it
+-- qualifies, else the first one found.
+local function terminal_in(cx: WindowCx, root: string): (number?, string?)
+	local function ok(info: PaneInfo?): boolean
+		return info ~= nil
+			and info.kind == "terminal"
+			and info.at_prompt == true
+			and type(info.cwd) == "string"
+			and under(info.cwd :: string, root)
+	end
+	local focused = cx.session:focused()
+	if focused then
+		local info = cx.session:pane(focused)
+		if ok(info) then
+			return focused, (info :: PaneInfo).cwd
+		end
+	end
+	for _, info in cx.session:panes() do
+		if ok(info) then
+			return info.pane, info.cwd
+		end
+	end
+	return nil, nil
+end
+
+-- Types `qf <identifier> collect <report folder>` into a terminal of the
+-- project at `root` (the given pane, else one `terminal_in` finds). Typed,
+-- not run: the person checks it and presses Enter.
+local function upload_into(cx: WindowCx, identifier: string, root: string, pane: number?, cwd: string?)
+	local target, target_cwd = pane, cwd
+	if target == nil or target_cwd == nil then
+		target, target_cwd = terminal_in(cx, root)
+	end
+	if target == nil or target_cwd == nil then
+		cx:toast("info", `Open a terminal in {root} to upload`, nil)
+		return
+	end
+	local proj = project.find_cached(root)
+	local pkg_path = ""
+	if proj then
+		for _, pkg in (proj :: project.Project).packages do
+			if pkg.identifier == identifier then
+				pkg_path = pkg.path
+			end
+		end
+	end
+	local extra = tern.kv.get("report_dirs")
+	local dirs = detect.report_dirs(root, pkg_path, if type(extra) == "table" then extra else nil)
+	if #dirs == 0 then
+		cx:toast("info", "No report folder yet", "Run your tests with a Qualflare reporter, or /qf-run.")
+		return
+	end
+	local rel = detect.relative(dirs[1], target_cwd :: string)
+	cx:run(target :: number, `qf {identifier} collect {qf.quote(rel)}`)
+end
+
+local function fix_in(cx: WindowCx, root: string)
+	-- Needs the Qualflare plugin in omp (its qf-fix skill).
+	cx.agents:start({ prompt = "/skill:qf-fix", cwd = root, how = "split" })
+end
 
 tern.command({
 	id = "upload",
@@ -45,15 +111,7 @@ tern.command({
 			return no_project(cx)
 		end
 		local p = proj :: project.Project
-		local extra = tern.kv.get("report_dirs")
-		local dirs = detect.report_dirs(p.root, p.package.path, if type(extra) == "table" then extra else nil)
-		if #dirs == 0 then
-			cx:toast("info", "No report folder yet", "Run your tests with a Qualflare reporter, or /qf-run.")
-			return
-		end
-		local target = detect.relative(dirs[1], cwd :: string)
-		-- Typed, not run: the person checks it and presses Enter.
-		cx:run(pane :: number, `qf {p.package.identifier} collect {qf.quote(target)}`)
+		upload_into(cx, p.package.identifier, p.root, pane, cwd)
 	end,
 })
 
@@ -79,8 +137,7 @@ tern.command({
 		if proj == nil or cwd == nil then
 			return no_project(cx)
 		end
-		-- Needs the Qualflare plugin in omp (its qf-fix skill).
-		cx.agents:start({ prompt = "/skill:qf-fix", cwd = (proj :: project.Project).root, how = "split" })
+		fix_in(cx, (proj :: project.Project).root)
 	end,
 })
 
@@ -94,6 +151,77 @@ tern.command({
 		cx:toast("info", if on then "Upload prompt off" else "Upload prompt on", nil)
 	end,
 })
+
+tern.command({
+	id = "toggle_links",
+	title = "Qualflare: Toggle opening Qualflare links in Tern",
+	icon = "link",
+	run = function(cx: WindowCx)
+		local on = tern.kv.get("route_links") ~= false
+		tern.kv.set("route_links", not on)
+		cx:toast("info", if on then "Qualflare links open in the browser" else "Qualflare links open in Tern", nil)
+	end,
+})
+
+---------------------------------------------------------------------------
+-- Links: the tab's hand-offs, and dashboard launch links from terminals
+---------------------------------------------------------------------------
+
+-- Identifiers the link route can map a dashboard slug to: what `qf
+-- projects` listed when a tab last opened, plus the clicked pane's project.
+local function known_identifiers(cwd: string?): { string }
+	local list: { string } = {}
+	local saved = tern.kv.get("known_identifiers")
+	if type(saved) == "table" then
+		for _, id in saved do
+			if type(id) == "string" then
+				table.insert(list, id)
+			end
+		end
+	end
+	if cwd and cwd ~= "" then
+		local proj = project.find_cached(cwd :: string)
+		if proj then
+			for _, pkg in (proj :: project.Project).packages do
+				if not table.find(list, pkg.identifier) then
+					table.insert(list, pkg.identifier)
+				end
+			end
+		end
+	end
+	return list
+end
+
+tern.route.link(function(link: LinkRequest, cx: WindowCx): RouteDecision?
+	local action, params = links.parse_bridge(link.url)
+	if action then
+		local root = params.root or ""
+		if action == "upload" and params.id and root ~= "" then
+			upload_into(cx, params.id, root, nil, nil)
+		elseif action == "fix" and root ~= "" then
+			fix_in(cx, root)
+		end
+		return { handled = true }
+	end
+	if tern.kv.get("route_links") == false then
+		return nil
+	end
+	-- Only clicks in terminals: the tab's own "Open on website" must reach
+	-- the browser, not come back here.
+	local info = cx.session:pane(link.pane)
+	if info == nil or info.kind ~= "terminal" then
+		return nil
+	end
+	local target = links.launch_from_url(link.url)
+	if target == nil then
+		return nil
+	end
+	local id = links.identifier_for(target.slug, known_identifiers(info.cwd))
+	if id == nil then
+		return nil
+	end
+	return { block = "qualflare.launches", args = { id :: string, tostring(target.seq) } }
+end)
 
 ---------------------------------------------------------------------------
 -- Carly: read-only exports and request context
