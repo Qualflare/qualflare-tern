@@ -299,15 +299,4 @@ function M.defects_table(items: Items): Node
 	return ui.table(cols, rows, { selectable = true, empty = "No defects." })
 end
 
--- Stat tiles for the newest launch.
-function M.latest_stats(l: any): Node
-	local failed = num(l.failedCount) + num(l.errorCount) + num(l.timeoutCount)
-	return ui.stats({
-		{ label = "Latest launch", value = "#" .. str(l.seq), sub = M.when(l.createdAt) },
-		{ label = "Passed", value = str(num(l.passedCount)), tone = "success" },
-		{ label = "Failed", value = str(failed), tone = if failed > 0 then "error" else nil },
-		{ label = "Flaky", value = str(num(l.flakyCount)), tone = if num(l.flakyCount) > 0 then "warning" else nil },
-	})
-end
-
 return M

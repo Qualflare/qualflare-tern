@@ -200,45 +200,104 @@ test("slugs setting overrides the dashboard slug", function()
 	S.kv.slugs = nil
 end)
 
-test("launches block loads launches and clusters through qf", function()
+test("block loads projects and launches through qf", function()
 	S.kv.qf_path = "/bin/qf"
 	qf.reset()
+	S.process["/bin/qf projects"] = { status = 0, stdout = "demo-app\nweb\n", stderr = "", timed_out = false }
 	S.process["/bin/qf demo-app launches list"] = { status = 0, stdout = LAUNCHES, stderr = "", timed_out = false }
-	S.process["/bin/qf demo-app clusters list"] = { status = 0, stdout = CLUSTERS, stderr = "", timed_out = false }
 	local B = S.blocks.launches
 	local cx = S.block_cx(5, "/w/repo")
 	local s = B.init(cx, { "demo-app" }, nil)
-	eq(cx.renders, 1, "rendered once after both reads")
 	eq(B.title(s), "Qualflare · demo-app")
-	local v = B.view(s, cx)
-	local t = S.text(v.main)
-	has(t, "Latest launch")
-	has(t, "#42")
-	has(t, "TimeoutError waiting for #pay-button")
-	B.event(s, { ev = "action", act = "cluster=7" }, cx)
-	B.event(s, { ev = "action", act = "launch=42" }, cx)
-	B.event(s, { ev = "action", act = "dashboard" }, cx)
-	eq(S.opened[1], "https://app.qualflare.com/project/demo-app/clusters/7")
-	eq(S.opened[2], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=42")
-	eq(S.opened[3], "https://app.qualflare.com/project/demo-app/launches")
-	local saved = B.save(s)
-	eq(saved.identifier, "demo-app")
+	eq(#s.projects, 2)
+	eq(S.kv.known_identifiers[2], "web")
+	has(S.text(B.view(s, cx).main), "Pass rate")
+	B.event(s, { ev = "activate", item = "launch=42" }, cx)
+	eq(S.opened[#S.opened], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=42")
+	B.event(s, { ev = "select", item = "launch=41" }, cx)
+	B.event(s, { ev = "action", act = "open" }, cx)
+	eq(S.opened[#S.opened], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=41")
+	eq(B.save(s).identifier, "demo-app")
+	eq(B.save(s).selected, 41)
 end)
 
-test("launches block shows qf's error", function()
+test("block opens on a launch from args and switches project", function()
+	S.process["/bin/qf web launches list"] = { status = 0, stdout = LAUNCHES, stderr = "", timed_out = false }
+	local B = S.blocks.launches
+	local cx = S.block_cx(8, nil)
+	local s = B.init(cx, { "demo-app", "41" }, nil)
+	eq(s.selected, 41)
+	B.event(s, { ev = "change", id = "main.head.start.project", value = "web" }, cx)
+	eq(s.identifier, "web")
+	eq(s.selected, nil)
+	eq(B.title(s), "Qualflare · web")
+end)
+
+test("block keeps the selected launch across refresh", function()
+	local B = S.blocks.launches
+	local cx = S.block_cx(9, nil)
+	local s = B.init(cx, { "demo-app" }, nil)
+	B.event(s, { ev = "select", item = "launch=41" }, cx)
+	B.key(s, { name = "r", ctrl = false, alt = false, shift = false, meta = false }, cx)
+	eq(s.selected, 41)
+	s.selected = 9999
+	B.key(s, { name = "r", ctrl = false, alt = false, shift = false, meta = false }, cx)
+	eq(s.selected, nil)
+end)
+
+test("block moves the selection with arrow keys", function()
+	local B = S.blocks.launches
+	local cx = S.block_cx(12, nil)
+	local s = B.init(cx, { "demo-app" }, nil)
+	local k = function(name: string): any
+		return { name = name, ctrl = false, alt = false, shift = false, meta = false }
+	end
+	eq(B.key(s, k("down"), cx), true)
+	eq(s.selected, 41)
+	B.key(s, k("up"), cx)
+	eq(s.selected, 42)
+	B.key(s, k("enter"), cx)
+	eq(S.opened[#S.opened], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=42")
+	eq(B.key(s, k("x"), cx), false)
+end)
+
+test("block pages with Show more", function()
+	S.process["/bin/qf paged launches list"] = { status = 0, stdout = '{"items":[{"seq":3,"status":"passed"}],"paging":{"page":1,"pages":2}}', stderr = "", timed_out = false }
+	S.process["/bin/qf paged launches list --page 2"] = { status = 0, stdout = '{"items":[{"seq":2,"status":"passed"}],"paging":{"page":2,"pages":2}}', stderr = "", timed_out = false }
+	local B = S.blocks.launches
+	local cx = S.block_cx(11, nil)
+	local s = B.init(cx, { "paged" }, nil)
+	eq(s.more, true)
+	B.event(s, { ev = "action", act = "more" }, cx)
+	eq(#s.launches, 2)
+	eq(s.more, false)
+end)
+
+test("block shows qf's error and the login hint", function()
 	S.process["/bin/qf nologin launches list"] = { status = 3, stdout = "", stderr = "Error: no token loaded; run 'qf login'\n", timed_out = false }
-	S.process["/bin/qf nologin clusters list"] = { status = 3, stdout = "", stderr = "", timed_out = false }
 	local B = S.blocks.launches
 	local cx = S.block_cx(6, nil)
 	local s = B.init(cx, { "nologin" }, nil)
-	has(S.text(B.view(s, cx).main), "no token loaded")
+	has(S.text(B.view(s, cx).main), "qf login nologin")
 end)
 
-test("launches block without a project explains /qf-init", function()
+test("block without a project explains /qf-init", function()
 	local B = S.blocks.launches
 	local cx = S.block_cx(7, "/nowhere")
+	S.process["/bin/qf projects"] = { status = 0, stdout = "", stderr = "", timed_out = false }
 	local s = B.init(cx, {}, nil)
 	has(S.text(B.view(s, cx).main), "/qf-init")
+end)
+
+test("block buttons hand upload and fix to the window", function()
+	local B = S.blocks.launches
+	local cx = S.block_cx(10, "/w/repo")
+	local s = B.init(cx, { "demo-app" }, nil)
+	B.event(s, { ev = "action", act = "upload" }, cx)
+	has(S.opened[#S.opened], "qualflare-tern:upload?id=demo-app")
+	B.event(s, { ev = "action", act = "fix" }, cx)
+	has(S.opened[#S.opened], "qualflare-tern:fix?id=demo-app")
+	has(S.opened[#S.opened], "root=%2Fw%2Frepo")
 end)
 
 test("finished qf collect updates the status widget", function()
