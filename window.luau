@@ -40,13 +40,14 @@ local function under(path: string, root: string): boolean
 	return path == root or string.sub(path, 1, #root + 1) == root .. "/"
 end
 
--- A terminal pane at its prompt inside `root`: the focused one if it
--- qualifies, else the first one found.
-local function terminal_in(cx: WindowCx, root: string): (number?, string?)
+-- A visible terminal pane at its prompt inside `root`: the focused one if
+-- it qualifies, else one in the same tab as `near`, else any.
+local function terminal_in(cx: WindowCx, root: string, near: number?): (number?, string?)
 	local function ok(info: PaneInfo?): boolean
 		return info ~= nil
 			and info.kind == "terminal"
 			and info.at_prompt == true
+			and info.parked ~= true
 			and type(info.cwd) == "string"
 			and under(info.cwd :: string, root)
 	end
@@ -57,10 +58,18 @@ local function terminal_in(cx: WindowCx, root: string): (number?, string?)
 			return focused, (info :: PaneInfo).cwd
 		end
 	end
+	local tab = if near then cx.session:tab_of(near) else nil
+	local first: PaneInfo? = nil
 	for _, info in cx.session:panes() do
 		if ok(info) then
-			return info.pane, info.cwd
+			if tab ~= nil and cx.session:tab_of(info.pane) == tab then
+				return info.pane, info.cwd
+			end
+			first = first or info
 		end
+	end
+	if first then
+		return (first :: PaneInfo).pane, (first :: PaneInfo).cwd
 	end
 	return nil, nil
 end
@@ -68,10 +77,12 @@ end
 -- Types `qf <identifier> collect <report folder>` into a terminal of the
 -- project at `root` (the given pane, else one `terminal_in` finds). Typed,
 -- not run: the person checks it and presses Enter.
-local function upload_into(cx: WindowCx, identifier: string, root: string, pane: number?, cwd: string?)
+local function upload_into(cx: WindowCx, identifier: string, root: string, pane: number?, cwd: string?, near: number?)
 	local target, target_cwd = pane, cwd
+	local found = false
 	if target == nil or target_cwd == nil then
-		target, target_cwd = terminal_in(cx, root)
+		target, target_cwd = terminal_in(cx, root, near)
+		found = true
 	end
 	if target == nil or target_cwd == nil then
 		cx:toast("info", `Open a terminal in {root} to upload`, nil)
@@ -93,7 +104,10 @@ local function upload_into(cx: WindowCx, identifier: string, root: string, pane:
 		return
 	end
 	local rel = detect.relative(dirs[1], target_cwd :: string)
-	cx:run(target :: number, `qf {identifier} collect {qf.quote(rel)}`)
+	cx:run(target :: number, `qf {qf.quote(identifier)} collect {qf.quote(rel)}`)
+	if found then
+		cx.layout:focus(target :: number) -- show where the command went
+	end
 end
 
 local function fix_in(cx: WindowCx, root: string)
@@ -192,31 +206,54 @@ local function known_identifiers(cwd: string?): { string }
 	return list
 end
 
+-- Whether `root` is the folder of a Qualflare project that has `id`.
+local function project_has(root: string, id: string): boolean
+	local proj = project.find_cached(root)
+	if proj == nil or (proj :: project.Project).root ~= root then
+		return false
+	end
+	for _, pkg in (proj :: project.Project).packages do
+		if pkg.identifier == id then
+			return true
+		end
+	end
+	return false
+end
+
 tern.route.link(function(link: LinkRequest, cx: WindowCx): RouteDecision?
+	local info = if link.pane ~= nil then cx.session:pane(link.pane) else nil
 	local action, params = links.parse_bridge(link.url)
 	if action then
-		local root = params.root or ""
-		if action == "upload" and params.id and root ~= "" then
-			upload_into(cx, params.id, root, nil, nil)
-		elseif action == "fix" and root ~= "" then
-			fix_in(cx, root)
+		-- Only the Qualflare tab hands work over, and only for its own
+		-- project: a link printed anywhere else could name any folder.
+		local from_tab = info ~= nil and info.kind == "plugin" and info.block == "qualflare.launches"
+		local id, root = params.id, params.root
+		if not from_tab or id == nil or root == nil or not project_has(root :: string, id :: string) then
+			return { handled = true }
+		end
+		if action == "upload" then
+			upload_into(cx, id :: string, root :: string, nil, nil, link.pane)
+		elseif action == "fix" then
+			fix_in(cx, root :: string)
 		end
 		return { handled = true }
 	end
 	if tern.kv.get("route_links") == false then
 		return nil
 	end
-	-- Only clicks in terminals: the tab's own "Open on website" must reach
-	-- the browser, not come back here.
-	local info = cx.session:pane(link.pane)
-	if info == nil or info.kind ~= "terminal" then
+	-- The plugin's own website opens (lens rows, the tab's button) go out.
+	if string.find(link.url, views.OWN, 1, true) then
+		return nil
+	end
+	-- Only clicks in terminals.
+	if info == nil or (info :: PaneInfo).kind ~= "terminal" then
 		return nil
 	end
 	local target = links.launch_from_url(link.url)
 	if target == nil then
 		return nil
 	end
-	local id = links.identifier_for(target.slug, known_identifiers(info.cwd))
+	local id = links.identifier_for(target.slug, known_identifiers((info :: PaneInfo).cwd))
 	if id == nil then
 		return nil
 	end

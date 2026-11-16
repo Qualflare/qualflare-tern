@@ -12,6 +12,8 @@ local S = {
 	commands = {} :: { [string]: any },
 	exports = {} :: { [string]: any },
 	routes = {} :: { any },
+	timers = {} :: { any },
+	focused_panes = {} :: { number },
 	writes = {} :: { { pane: number, text: string } },
 	toasts = {} :: { { string } },
 	opened = {} :: { string },
@@ -128,6 +130,14 @@ local function window_cx(focused: number?)
 		panes = function(_)
 			return S.panes
 		end,
+		tab_of = function(_, p)
+			for _, info in S.panes do
+				if info.pane == p then
+					return info.tab
+				end
+			end
+			return nil
+		end,
 		pane = function(_, p)
 			for _, info in S.panes do
 				if info.pane == p then
@@ -141,6 +151,11 @@ local function window_cx(focused: number?)
 		start = function(_, opts)
 			table.insert(S.runs, { "agent", opts.prompt, opts.cwd })
 			return 99
+		end,
+	}
+	cx.layout = {
+		focus = function(_, p)
+			table.insert(S.focused_panes, p)
 		end,
 	}
 	function cx:new_block(kind, args, how)
@@ -167,8 +182,13 @@ tern = {
 	getenv = function(name)
 		return if name == "HOME" then "/home/u" else nil
 	end,
-	timer = function(_ms, _fn)
-		return { cancel = function() end }
+	timer = function(_ms, fn)
+		local t = { fn = fn, cancelled = false }
+		function t.cancel(_)
+			t.cancelled = true
+		end
+		table.insert(S.timers, t)
+		return t
 	end,
 	kv = {
 		get = function(k)
@@ -309,6 +329,7 @@ end
 
 function S.reset()
 	S.writes, S.toasts, S.opened, S.runs = {}, {}, {}, {}
+	S.timers, S.focused_panes = {}, {}
 end
 
 return S

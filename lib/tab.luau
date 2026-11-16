@@ -23,6 +23,12 @@ export type TabState = {
 	now: number,
 	refreshed: number?,
 	menu_open: boolean,
+	-- the highlighted project while the menu is open
+	menu_active: string?,
+	-- an older launch fetched on its own for the card
+	pinned: any?,
+	-- the project's folder; nil when this tab's folder isn't that project
+	root: string?,
 }
 
 local RISK_TONE: { [string]: string } = {
@@ -55,8 +61,22 @@ function M.selected_launch(s: TabState): any?
 				return l
 			end
 		end
+		if s.pinned and s.pinned.seq == s.selected then
+			return s.pinned
+		end
 	end
 	return launches[1]
+end
+
+-- Why Upload and Fix can't run here, or false when they can.
+local function hand_off_reason(s: TabState): string | boolean
+	if s.identifier == nil then
+		return true
+	end
+	if s.root == nil then
+		return "Open this tab from a folder of the project to upload or fix"
+	end
+	return false
 end
 
 local function head(s: TabState): Node
@@ -68,6 +88,7 @@ local function head(s: TabState): Node
 		value = s.identifier,
 		placeholder = "Project",
 		open = s.menu_open,
+		active = s.menu_active,
 	})
 	local meta = if s.refreshed then ui.text({ ui.span(`· updated {views.ago(s.refreshed, s.now)}`, "muted") }) else nil
 	local left: { Node } = { ui.text(title), menu }
@@ -77,7 +98,7 @@ local function head(s: TabState): Node
 	return ui.node("row", { key = "head", justify = "between", align = "center" }, {
 		ui.node("row", { key = "start", gap = "sm", align = "center" }, left),
 		ui.node("row", { key = "end", gap = "sm", align = "center" }, {
-			ui.button("Upload", { key = "upload", icon = "push", keys = { "u" }, disabled = s.identifier == nil, actions = { click = "upload" } }),
+			ui.button("Upload", { key = "upload", icon = "push", keys = { "u" }, disabled = hand_off_reason(s), actions = { click = "upload" } }),
 			ui.button("Refresh", { key = "refresh", icon = "repeat", keys = { "r" }, busy = s.loading, disabled = s.identifier == nil, actions = { click = "refresh" } }),
 		}),
 	})
@@ -107,7 +128,7 @@ local function bullet_list(items: { string }): Node
 	return ui.list(rows)
 end
 
-local function card(l: any): Node
+local function card(l: any, s: TabState): Node
 	local failed = views.failed(l)
 	local facts: { { Spans } } = {}
 	local function fact(label: string, value: any)
@@ -154,7 +175,7 @@ local function card(l: any): Node
 		ui.button("Open on website", { key = "open", variant = "primary", icon = "open", keys = { "enter" }, actions = { click = "open" } }),
 	}
 	if failed > 0 then
-		table.insert(buttons, ui.button("Fix with omp", { key = "fix", icon = "app-omp", actions = { click = "fix" } }))
+		table.insert(buttons, ui.button("Fix with omp", { key = "fix", icon = "app-omp", disabled = hand_off_reason(s), actions = { click = "fix" } }))
 	end
 	table.insert(body, ui.node("row", { gap = "sm" }, buttons))
 
@@ -219,7 +240,7 @@ function M.view(s: TabState): BlockView
 		end
 		local row: { Node } = { ui.node("col", { key = "list", gap = "sm", grow = 1 }, left) }
 		if l then
-			table.insert(row, card(l))
+			table.insert(row, card(l, s))
 		end
 		table.insert(parts, ui.node("row", { key = "launches", gap = "lg", align = "start" }, row))
 		if s.error then

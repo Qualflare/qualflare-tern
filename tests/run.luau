@@ -175,8 +175,8 @@ test("list lens: raw until JSON parses, then a launches table", function()
 	-- open button and double-click
 	L.event(s, { ev = "action", act = "launch=42" }, S.effect_cx())
 	L.event(s, { ev = "activate", item = "launch=41" }, S.effect_cx())
-	eq(S.opened[1], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=42")
-	eq(S.opened[2], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=41")
+	eq(S.opened[1], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=42&src=tern")
+	eq(S.opened[2], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=41&src=tern")
 end)
 
 test("list lens: a failed qf leaves raw output", function()
@@ -213,10 +213,10 @@ test("block loads projects and launches through qf", function()
 	eq(S.kv.known_identifiers[2], "web")
 	has(S.text(B.view(s, cx).main), "Pass rate")
 	B.event(s, { ev = "activate", item = "launch=42" }, cx)
-	eq(S.opened[#S.opened], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=42")
+	eq(S.opened[#S.opened], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=42&src=tern")
 	B.event(s, { ev = "select", item = "launch=41" }, cx)
 	B.event(s, { ev = "action", act = "open" }, cx)
-	eq(S.opened[#S.opened], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=41")
+	eq(S.opened[#S.opened], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=41&src=tern")
 	eq(B.save(s).identifier, "demo-app")
 	eq(B.save(s).selected, 41)
 end)
@@ -257,7 +257,7 @@ test("block moves the selection with arrow keys", function()
 	B.key(s, k("up"), cx)
 	eq(s.selected, 42)
 	B.key(s, k("enter"), cx)
-	eq(S.opened[#S.opened], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=42")
+	eq(S.opened[#S.opened], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=42&src=tern")
 	eq(B.key(s, k("x"), cx), false)
 end)
 
@@ -409,7 +409,7 @@ end)
 test("bridge fix starts omp at the project root; upload types into a terminal", function()
 	S.files["/w/repo/.qualflare/test-state.md"] = STATE
 	S.files["/w/repo/qualflare-results/.keep"] = ""
-	S.panes = { { pane = 3, kind = "plugin", cwd = "", title = "" } }
+	S.panes = { { pane = 3, kind = "plugin", cwd = "", title = "", block = "qualflare.launches" } }
 	local cx = S.window_cx(3)
 	local d = S.routes[1]({ url = "qualflare-tern:fix?id=demo-app&root=%2Fw%2Frepo", pane = 3, mods = {} }, cx)
 	eq(d.handled, true)
@@ -417,7 +417,7 @@ test("bridge fix starts omp at the project root; upload types into a terminal", 
 	eq(r[2], "/skill:qf-fix")
 	eq(r[3], "/w/repo")
 	S.panes = {
-		{ pane = 3, kind = "plugin", cwd = "", title = "" },
+		{ pane = 3, kind = "plugin", cwd = "", title = "", block = "qualflare.launches" },
 		{ pane = 5, kind = "terminal", cwd = "/elsewhere", title = "", at_prompt = true },
 		{ pane = 4, kind = "terminal", cwd = "/w/repo", title = "", at_prompt = true },
 	}
@@ -429,10 +429,165 @@ end)
 test("bridge upload with no terminal in the project says where to open one", function()
 	S.files["/w/repo/.qualflare/test-state.md"] = STATE
 	S.files["/w/repo/qualflare-results/.keep"] = ""
-	S.panes = { { pane = 3, kind = "plugin", cwd = "", title = "" } }
+	S.panes = { { pane = 3, kind = "plugin", cwd = "", title = "", block = "qualflare.launches" } }
 	S.routes[1]({ url = "qualflare-tern:upload?id=demo-app&root=%2Fw%2Frepo", pane = 3, mods = {} }, S.window_cx(3))
 	eq(#S.writes, 0)
 	has(S.toasts[#S.toasts][2], "Open a terminal in /w/repo")
+end)
+
+---------------------------------------------------------------------------
+-- Final review fixes
+---------------------------------------------------------------------------
+
+local function key(name: string): any
+	return { name = name, ctrl = false, alt = false, shift = false, meta = false }
+end
+
+local function plain_projects()
+	S.kv.qf_path = "/bin/qf"
+	qf.reset()
+	S.process["/bin/qf projects"] = { status = 0, stdout = "demo-app\nweb\n", stderr = "", timed_out = false }
+	S.process["/bin/qf demo-app launches list"] = { status = 0, stdout = LAUNCHES, stderr = "", timed_out = false }
+	S.process["/bin/qf web launches list"] = { status = 0, stdout = LAUNCHES, stderr = "", timed_out = false }
+end
+
+test("review: a restored tab keeps its saved project over launch args", function()
+	plain_projects()
+	local B = S.blocks.launches
+	local s = B.init(S.block_cx(20, nil), { "demo-app", "42" }, { identifier = "web", selected = 41 })
+	eq(s.identifier, "web")
+	eq(s.selected, 41)
+end)
+
+test("review: the refresh timer stops once the tab's pane is gone", function()
+	plain_projects()
+	S.panes = { { pane = 21, title = "" } }
+	local B = S.blocks.launches
+	B.init(S.block_cx(21, nil), { "demo-app" }, nil)
+	local t = S.timers[#S.timers]
+	S.panes = {}
+	local before = #S.runs
+	t.fn()
+	eq(#S.runs, before, "no qf run after the pane closed")
+	eq(#S.timers, 1, "no new timer scheduled")
+	S.panes = {}
+end)
+
+test("review: refresh keeps Show more pages, dedupes and keeps the selection", function()
+	S.kv.qf_path = "/bin/qf"
+	qf.reset()
+	S.process["/bin/qf pg launches list"] = { status = 0, stdout = '{"items":[{"seq":4,"status":"passed"},{"seq":3,"status":"passed"}],"paging":{"page":1,"pages":2}}', stderr = "", timed_out = false }
+	S.process["/bin/qf pg launches list --page 2"] = { status = 0, stdout = '{"items":[{"seq":3,"status":"passed"},{"seq":1,"status":"passed"}],"paging":{"page":2,"pages":2}}', stderr = "", timed_out = false }
+	local B = S.blocks.launches
+	local cx = S.block_cx(22, nil)
+	local s = B.init(cx, { "pg" }, nil)
+	B.event(s, { ev = "action", act = "more" }, cx)
+	eq(#s.launches, 3, "duplicate #3 dropped")
+	B.event(s, { ev = "select", item = "launch=1" }, cx)
+	B.key(s, key("r"), cx)
+	eq(#s.launches, 3, "refresh keeps the extra page")
+	eq(s.selected, 1)
+end)
+
+test("review: a link to an older launch fetches and shows it", function()
+	plain_projects()
+	S.process["/bin/qf demo-app launch get 5"] = { status = 0, stdout = '{"seq":5,"status":"failed","totalCount":3,"passedCount":1,"failedCount":2,"branch":"old-branch"}', stderr = "", timed_out = false }
+	local B = S.blocks.launches
+	local cx = S.block_cx(23, nil)
+	local s = B.init(cx, { "demo-app", "5" }, nil)
+	eq(s.selected, 5)
+	has(S.text(B.view(s, cx).main), "old-branch")
+end)
+
+test("review: the project menu takes arrow keys and Enter while open", function()
+	plain_projects()
+	local B = S.blocks.launches
+	local cx = S.block_cx(24, nil)
+	local s = B.init(cx, { "demo-app" }, nil)
+	local opened = #S.opened
+	B.key(s, key("p"), cx)
+	B.key(s, key("down"), cx)
+	B.key(s, key("enter"), cx)
+	eq(s.identifier, "web")
+	eq(s.menu_open, false)
+	eq(#S.opened, opened, "Enter in the menu doesn't open the website")
+end)
+
+test("review: qf projects' no-projects sentence isn't a project", function()
+	S.kv.qf_path = "/bin/qf"
+	qf.reset()
+	S.process["/bin/qf projects"] = { status = 0, stdout = "No projects configured. Run 'qf login <identifier> <token>' to get started.\n", stderr = "", timed_out = false }
+	S.kv.known_identifiers = { "stale" }
+	local B = S.blocks.launches
+	local s = B.init(S.block_cx(25, "/nowhere"), {}, nil)
+	eq(s.identifier, nil)
+	eq(#s.projects, 0)
+	eq(#S.kv.known_identifiers, 0)
+end)
+
+test("review: hand-offs use the shown project's folder, or are refused", function()
+	plain_projects()
+	S.files["/w/repo/.qualflare/test-state.md"] = STATE
+	S.process["/bin/qf other launches list"] = { status = 0, stdout = LAUNCHES, stderr = "", timed_out = false }
+	local B = S.blocks.launches
+	local cx = S.block_cx(26, "/w/repo")
+	local s = B.init(cx, { "demo-app" }, nil)
+	B.event(s, { ev = "change", id = "main.head.start.project", value = "other" }, cx)
+	local opened = #S.opened
+	B.event(s, { ev = "action", act = "upload" }, cx)
+	eq(#S.opened, opened, "no hand-off for a project outside this folder")
+	has(S.toasts[#S.toasts][2], "other")
+	B.event(s, { ev = "change", id = "main.head.start.project", value = "acme-web" }, cx)
+	B.event(s, { ev = "action", act = "upload" }, cx)
+	has(S.opened[#S.opened], "id=acme-web")
+	has(S.opened[#S.opened], "root=%2Fw%2Frepo")
+end)
+
+test("review: upload skips parked panes and prefers the tab's own tab, then focuses it", function()
+	S.files["/w/repo/.qualflare/test-state.md"] = STATE
+	S.files["/w/repo/qualflare-results/.keep"] = ""
+	S.panes = {
+		{ pane = 3, kind = "plugin", cwd = "", title = "", tab = 1, block = "qualflare.launches" },
+		{ pane = 6, kind = "terminal", cwd = "/w/repo", title = "", at_prompt = true, parked = true },
+		{ pane = 7, kind = "terminal", cwd = "/w/repo", title = "", at_prompt = true, tab = 2 },
+		{ pane = 8, kind = "terminal", cwd = "/w/repo", title = "", at_prompt = true, tab = 1 },
+	}
+	S.routes[1]({ url = "qualflare-tern:upload?id=demo-app&root=%2Fw%2Frepo", pane = 3, mods = {} }, S.window_cx(3))
+	eq(S.writes[#S.writes].pane, 8)
+	eq(S.focused_panes[#S.focused_panes], 8)
+end)
+
+test("review: hand-off links only work from the Qualflare tab, for its project", function()
+	S.files["/w/repo/.qualflare/test-state.md"] = STATE
+	S.files["/w/repo/qualflare-results/.keep"] = ""
+	S.panes = {
+		{ pane = 1, kind = "terminal", cwd = "/w/repo", title = "", at_prompt = true },
+		{ pane = 3, kind = "plugin", cwd = "", title = "", block = "qualflare.launches" },
+	}
+	local agents = #S.runs
+	S.routes[1]({ url = "qualflare-tern:fix?id=demo-app&root=%2Fw%2Frepo", pane = 1, mods = {} }, S.window_cx(1))
+	eq(#S.runs, agents, "a terminal can't start omp through a hand-off link")
+	S.routes[1]({ url = "qualflare-tern:fix?id=demo-app&root=%2FUsers%2Fsomeone", pane = 3, mods = {} }, S.window_cx(3))
+	eq(#S.runs, agents, "no omp in a folder that isn't the project")
+	S.files["/w/repo/.qualflare/test-state.md"] = STATE .. "| other | x; curl evil |\n"
+	S.routes[1]({ url = "qualflare-tern:upload?id=x%3B%20curl%20evil&root=%2Fw%2Frepo", pane = 3, mods = {} }, S.window_cx(3))
+	for _, w in S.writes do
+		assert(not string.find(w.text, "qf x; curl", 1, true), "identifier typed unquoted: " .. w.text)
+	end
+end)
+
+test("review: the plugin's own website opens aren't routed back into the tab", function()
+	S.kv.known_identifiers = { "demo-app" }
+	S.panes = { { pane = 1, kind = "terminal", cwd = "/w/repo", title = "" } }
+	local L = S.lenses.list
+	local ls = L.open({ line = "", typed = "", program = "qf", args = { "demo-app", "launches", "list" } }, S.effect_cx())
+	for _, l in lines(LAUNCHES) do
+		L.line(ls, l)
+	end
+	L.finish(ls, 0)
+	L.event(ls, { ev = "activate", item = "launch=42" }, S.effect_cx())
+	local url = S.opened[#S.opened]
+	eq(S.routes[1]({ url = url, pane = 1, mods = {} }, S.window_cx(1)), nil)
 end)
 
 ---------------------------------------------------------------------------

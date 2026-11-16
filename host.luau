@@ -223,7 +223,7 @@ local function item_url(identifier: string, ev: UiEvent): string?
 	end
 	local kind, value = string.match(s, "^(%a+)=(.+)$")
 	if kind == "launch" then
-		return views.launch_url(identifier, value)
+		return views.own(views.launch_url(identifier, value))
 	elseif kind == "cluster" then
 		return views.cluster_url(identifier, value)
 	elseif kind == "defect" then
@@ -289,10 +289,30 @@ type BlockState = {
 	now: number,
 	refreshed: number?,
 	menu_open: boolean,
+	menu_active: string?,
+	-- an older launch a link asked for, fetched on its own (not in `launches`)
+	pinned: any?,
 	cwd: string?,
 	root: string?,
 	timer: TimerHandle?,
+	-- bumped per qf list request; older answers are dropped
+	req: number,
 }
+
+-- Whether the block's pane still exists (blocks have no close handler).
+local function running(pane: number): boolean
+	for _, p in tern.pane.list() do
+		if p.pane == pane then
+			return true
+		end
+	end
+	return false
+end
+
+-- An identifier as `qf projects` prints it, not a sentence it may print instead.
+local function is_identifier(line: string): boolean
+	return string.match(line, "^[%w][%w%-_%.]*$") ~= nil
+end
 
 local REFRESH_MS = 60000
 
@@ -316,22 +336,73 @@ local function has_seq(launches: { any }?, seq: number?): boolean
 	return false
 end
 
+local function seqs_of(list: { any }): { [any]: boolean }
+	local seen: { [any]: boolean } = {}
+	for _, l in list do
+		if l.seq ~= nil then
+			seen[l.seq] = true
+		end
+	end
+	return seen
+end
+
+-- Page 1 from a refresh replaces the top of the list but keeps launches that
+-- Show more loaded; a later page is appended. Either way no seq appears twice.
 local function apply_page(s: BlockState, data: any, append: boolean)
 	local items: { any } = views.items(data) or {}
-	if append and s.launches then
-		local merged = table.clone(s.launches :: { any })
+	local paging = if type(data) == "table" and type(data.paging) == "table" then data.paging else {}
+	local page = if type(paging.page) == "number" then paging.page else 1
+	local pages = if type(paging.pages) == "number" then paging.pages else page
+	local old = s.launches
+	if append and old then
+		local merged = table.clone(old :: { any })
+		local seen = seqs_of(merged)
 		for _, l in items do
-			table.insert(merged, l)
+			if not seen[l.seq] then
+				table.insert(merged, l)
+				seen[l.seq] = true
+			end
+		end
+		s.launches = merged
+		s.page = page
+		s.more = page < pages
+	elseif old and s.page > 1 then
+		local merged = table.clone(items)
+		local seen = seqs_of(merged)
+		for _, l in old :: { any } do
+			if not seen[l.seq] then
+				table.insert(merged, l)
+				seen[l.seq] = true
+			end
 		end
 		s.launches = merged
 	else
 		s.launches = items
+		s.page = page
+		s.more = page < pages
 	end
-	local paging = if type(data) == "table" and type(data.paging) == "table" then data.paging else {}
-	local page = if type(paging.page) == "number" then paging.page else 1
-	local pages = if type(paging.pages) == "number" then paging.pages else page
-	s.page = page
-	s.more = page < pages
+end
+
+-- Fetches a launch the list doesn't hold (a link to an older one) for the card.
+local function pin_selected(s: BlockState, cx: BlockCx)
+	local id, seq = s.identifier, s.selected
+	if id == nil or seq == nil or has_seq(s.launches, seq) then
+		return
+	end
+	if s.pinned and s.pinned.seq == seq then
+		return
+	end
+	qf.read({ id :: string, "launch", "get", tostring(seq) }, s.cwd, function(r)
+		if s.identifier ~= id or s.selected ~= seq then
+			return
+		end
+		if r.ok and type(r.data) == "table" then
+			s.pinned = r.data
+		else
+			s.selected = nil
+		end
+		cx:render()
+	end)
 end
 
 local function refresh(s: BlockState, cx: BlockCx)
@@ -340,9 +411,11 @@ local function refresh(s: BlockState, cx: BlockCx)
 		return
 	end
 	s.loading = true
+	s.req += 1
+	local req = s.req
 	qf.read({ id, "launches", "list" }, s.cwd, function(r)
-		if s.identifier ~= id then
-			return -- the project changed while this ran
+		if s.identifier ~= id or s.req ~= req then
+			return -- the project changed, or a newer request went out
 		end
 		s.loading = false
 		s.now = os.time()
@@ -351,8 +424,8 @@ local function refresh(s: BlockState, cx: BlockCx)
 			s.error = nil
 			s.status = nil
 			s.refreshed = s.now
-			if not has_seq(s.launches, s.selected) then
-				s.selected = nil
+			if not has_seq(s.launches, s.selected) and not (s.pinned and s.pinned.seq == s.selected) then
+				pin_selected(s, cx)
 			end
 		else
 			s.error = r.err
@@ -368,8 +441,10 @@ local function load_more(s: BlockState, cx: BlockCx)
 		return
 	end
 	s.loading = true
+	s.req += 1
+	local req = s.req
 	qf.read({ id, "launches", "list", "--page", tostring(s.page + 1) }, s.cwd, function(r)
-		if s.identifier ~= id then
+		if s.identifier ~= id or s.req ~= req then
 			return
 		end
 		s.loading = false
@@ -388,6 +463,9 @@ local function schedule(s: BlockState, cx: BlockCx)
 		(s.timer :: TimerHandle):cancel()
 	end
 	s.timer = tern.timer(REFRESH_MS, function()
+		if not running(cx.pane) then
+			return -- the tab closed
+		end
 		refresh(s, cx)
 		schedule(s, cx)
 	end)
@@ -395,11 +473,16 @@ end
 
 local function load_projects(s: BlockState, cx: BlockCx)
 	qf.lines({ "projects" }, s.cwd, function(r)
+		local list: { string } = {}
+		for _, line in r.lines do
+			if is_identifier(line) then
+				table.insert(list, line)
+			end
+		end
+		tern.kv.set("known_identifiers", table.clone(list))
 		if not r.ok then
 			return
 		end
-		tern.kv.set("known_identifiers", r.lines)
-		local list = table.clone(r.lines)
 		-- A project folder's identifier counts even if `qf projects` lacks it.
 		if s.identifier and not table.find(list, s.identifier :: string) then
 			table.insert(list, 1, s.identifier :: string)
@@ -415,12 +498,32 @@ local function load_projects(s: BlockState, cx: BlockCx)
 	end)
 end
 
+-- The folder of the tab's project, when the tab's folder belongs to it.
+-- Upload and Fix need it; without it they're refused.
+local function root_for(cwd: string?, id: string?): string?
+	if cwd == nil or id == nil then
+		return nil
+	end
+	local proj = project.find(cwd :: string)
+	if proj == nil then
+		return nil
+	end
+	for _, pkg in (proj :: project.Project).packages do
+		if pkg.identifier == id then
+			return proj.root
+		end
+	end
+	return nil
+end
+
 local function set_project(s: BlockState, cx: BlockCx, id: string)
 	if id == s.identifier then
 		return
 	end
 	s.identifier = id
+	s.root = root_for(s.cwd, id)
 	s.launches = nil
+	s.pinned = nil
 	s.selected = nil
 	s.error = nil
 	s.status = nil
@@ -441,7 +544,7 @@ local function open_selected(s: BlockState, cx: BlockCx, seq: number?)
 	local id = s.identifier
 	local target = seq or selected_seq(s)
 	if id and target then
-		cx:open(views.launch_url(id :: string, target))
+		cx:open(views.own(views.launch_url(id :: string, target)))
 	end
 end
 
@@ -467,7 +570,11 @@ local function hand_off(s: BlockState, cx: BlockCx, action: string)
 	if id == nil then
 		return
 	end
-	cx:open(links.bridge(action, { id = id :: string, root = s.root or s.cwd or "" }))
+	if s.root == nil then
+		cx:toast("info", `{id} isn't in this tab's folder`, "Open the tab from a folder of that project to upload or fix.")
+		return
+	end
+	cx:open(links.bridge(action, { id = id :: string, root = s.root :: string }))
 end
 
 tern.block.define("launches", {
@@ -481,26 +588,25 @@ tern.block.define("launches", {
 			now = os.time(),
 			menu_open = false,
 			cwd = cx.cwd,
+			req = 0,
 		}
+		local proj = if cx.cwd then project.find(cx.cwd :: string) else nil
 		if type(saved) == "table" then
+			-- A restart (reload, daemon restart) brings the same args back;
+			-- what the person changed since lives in `saved`.
 			s.identifier = saved.identifier
 			s.launches = saved.launches
 			s.selected = saved.selected
 			s.refreshed = saved.refreshed
+		else
+			if args[1] and args[1] ~= "" then
+				s.identifier = args[1]
+			elseif proj then
+				s.identifier = proj.package.identifier
+			end
+			s.selected = if args[2] then tonumber(args[2]) else nil
 		end
-		local proj = if cx.cwd then project.find(cx.cwd :: string) else nil
-		if proj then
-			s.root = proj.root
-		end
-		if args[1] and args[1] ~= "" then
-			s.identifier = args[1]
-		elseif s.identifier == nil and proj then
-			s.identifier = proj.package.identifier
-		end
-		local seq = if args[2] then tonumber(args[2]) else nil
-		if seq then
-			s.selected = seq
-		end
+		s.root = root_for(cx.cwd, s.identifier)
 		if s.identifier then
 			s.projects = { s.identifier :: string }
 			refresh(s, cx)
@@ -546,20 +652,38 @@ tern.block.define("launches", {
 			return false
 		end
 		local n = key.name
+		if s.menu_open then
+			-- The project menu has the keys while it's open.
+			local at = table.find(s.projects, s.menu_active or s.identifier or "") or 0
+			if n == "up" or n == "k" then
+				s.menu_active = s.projects[math.max(at - 1, 1)]
+			elseif n == "down" or n == "j" then
+				s.menu_active = s.projects[math.min(at + 1, #s.projects)]
+			elseif n == "enter" then
+				s.menu_open = false
+				if s.menu_active then
+					set_project(s, cx, s.menu_active :: string)
+				end
+			elseif n == "escape" then
+				s.menu_open = false
+			else
+				return false
+			end
+			return true
+		end
 		if n == "r" then
 			refresh(s, cx)
 		elseif n == "u" then
 			hand_off(s, cx, "upload")
 		elseif n == "p" then
 			s.menu_open = true
+			s.menu_active = s.identifier
 		elseif n == "up" or n == "k" then
 			move(s, -1)
 		elseif n == "down" or n == "j" then
 			move(s, 1)
 		elseif n == "enter" then
 			open_selected(s, cx, nil)
-		elseif n == "escape" and s.menu_open then
-			s.menu_open = false
 		else
 			return false
 		end

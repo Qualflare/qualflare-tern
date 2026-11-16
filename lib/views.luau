@@ -29,6 +29,14 @@ function M.defect_url(identifier: string, seq: any): string
 	return `{APP}/project/{M.slug(identifier)}/defects?p=defect&p.seq={seq}`
 end
 
+-- Marks a dashboard URL the plugin itself opens, so the link route lets it
+-- through to the browser instead of opening the tab again.
+M.OWN = "src=tern"
+
+function M.own(url: string): string
+	return url .. (if string.find(url, "?", 1, true) then "&" else "?") .. M.OWN
+end
+
 function M.project_url(identifier: string, page: string?): string
 	return `{APP}/project/{M.slug(identifier)}/{page or "launches"}`
 end
