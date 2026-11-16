@@ -26,6 +26,9 @@ local function node(k: string, p: any?, c: any?)
 end
 
 local ui = {
+	node = function(k, p, c)
+		return node(k, p, c)
+	end,
 	span = function(t, s)
 		return { t = t, s = s }
 	end,
@@ -82,6 +85,9 @@ local ui = {
 	end,
 	test_summary = function(p, f, s, t)
 		return node("test_summary", { p, f, s, t })
+	end,
+	list = function(items)
+		return node("list", { items = items })
 	end,
 	md = function(t)
 		return node("md", { t = t })
@@ -272,6 +278,23 @@ function S.text(n: any): string
 	end
 	walk(n)
 	return table.concat(out, " | ")
+end
+
+-- Every node kind in a view tree, space-separated, for "has a skeleton" checks.
+function S.kind_list(n: any): string
+	local out = {}
+	local function walk(x)
+		if type(x) == "table" then
+			if type(x.k) == "string" then
+				table.insert(out, x.k)
+			end
+			for _, v in x do
+				walk(v)
+			end
+		end
+	end
+	walk(n)
+	return table.concat(out, " ")
 end
 
 function S.reset()

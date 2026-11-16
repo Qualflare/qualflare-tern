@@ -5,6 +5,7 @@ local project = require("../lib/project")
 local qf = require("../lib/qf")
 local views = require("../lib/views")
 local links = require("../lib/links")
+local tab = require("../lib/tab")
 
 local passed, failed, pending = 0, 0, 0
 local function test(name: string, fn: () -> ())
@@ -472,6 +473,77 @@ test("qf.lines returns trimmed non-empty lines", function()
 	eq(got.ok, true)
 	eq(#got.lines, 3)
 	eq(got.lines[2], "stage")
+end)
+
+
+---------------------------------------------------------------------------
+-- Qualflare tab page
+---------------------------------------------------------------------------
+
+local function st(over: any): any
+	local s: any = { identifier = "demo-app", projects = { "demo-app", "web" }, launches = nil, more = false, loading = false, now = 1763294400, menu_open = false, selected = nil }
+	for k, v in over do
+		s[k] = v
+	end
+	return s
+end
+
+test("tab: launches page has head, stats, table and the selected card", function()
+	local launches = (tern.json.decode(LAUNCHES) :: any).items
+	local v = tab.view(st({ launches = launches, selected = launches[2].seq, refreshed = 1763294400 - 60 }))
+	local t = S.text(v.main)
+	has(t, "Qualflare")
+	has(t, "Pass rate")
+	has(t, "Failed")
+	has(t, "Flaky")
+	has(t, "Last run")
+	has(t, "updated 1 min ago")
+	has(t, "#" .. tostring(launches[2].seq))
+	has(t, "Open on website")
+	has(S.kind_list(v.main), "select")
+	has(S.text(v.dock), "R refresh")
+	eq(tab.selected_launch(st({ launches = launches, selected = 41 })).seq, 41)
+	eq(tab.selected_launch(st({ launches = launches })).seq, 42)
+end)
+
+test("tab: Fix with omp shows only on failed launches", function()
+	local launches = (tern.json.decode(LAUNCHES) :: any).items -- fixture: [1] failed, [2] passed
+	has(S.text(tab.view(st({ launches = launches, selected = launches[1].seq })).main), "Fix with omp")
+	assert(not string.find(S.text(tab.view(st({ launches = launches, selected = launches[2].seq })).main), "Fix with omp", 1, true))
+end)
+
+test("tab: the card shows the AI summary when there is one", function()
+	local l = { seq = 5, status = "failed", totalCount = 10, passedCount = 9, failedCount = 1, aiSummary = '{"executiveSummary":"Checkout broke.","riskLevel":"high","riskJustification":"Payments fail.","failingAreas":["checkout"],"recommendations":["Fix the form."]}' }
+	local t = S.text(tab.view(st({ launches = { l } })).main)
+	has(t, "Checkout broke.")
+	has(t, "Payments fail.")
+	has(t, "Fix the form.")
+end)
+
+test("tab: Show more appears when another page exists", function()
+	local launches = (tern.json.decode(LAUNCHES) :: any).items
+	has(S.text(tab.view(st({ launches = launches, more = true })).main), "Show more")
+	assert(not string.find(S.text(tab.view(st({ launches = launches })).main), "Show more", 1, true))
+end)
+
+test("tab: empty launches shows the empty state", function()
+	local t = S.text(tab.view(st({ launches = {} })).main)
+	has(t, "No launches yet")
+	assert(not string.find(t, "Pass rate", 1, true), "no stats strip when empty")
+end)
+
+test("tab: loading, error and no-project states", function()
+	has(S.kind_list(tab.view(st({ loading = true })).main), "skeleton")
+	local e = S.text(tab.view(st({ error = "no token loaded", status = 3 })).main)
+	has(e, "Not logged in")
+	has(e, "qf login demo-app")
+	has(e, "Retry")
+	local none = st({})
+	none.identifier = nil
+	has(S.text(tab.view(none).main), "No Qualflare project here")
+	-- stale data stays on screen while a refresh runs
+	local launches = (tern.json.decode(LAUNCHES) :: any).items
+	has(S.text(tab.view(st({ loading = true, launches = launches })).main), "Pass rate")
 end)
 
 print(`{passed} passed, {failed} failed, {pending} pending`)

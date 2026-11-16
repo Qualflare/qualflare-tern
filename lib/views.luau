@@ -93,8 +93,9 @@ function M.epoch(ts: any): number?
 end
 
 -- "just now", "5 min ago", "3 h ago", "2 d ago", then the date from a week on.
+-- `ts` is an ISO timestamp or Unix seconds.
 function M.ago(ts: any, now: number): string
-	local t = M.epoch(ts)
+	local t = if type(ts) == "number" then ts else M.epoch(ts)
 	if t == nil then
 		return ""
 	end
@@ -105,7 +106,7 @@ function M.ago(ts: any, now: number): string
 		return `{secs // 60} min ago`
 	elseif secs < 86400 then
 		return `{secs // 3600} h ago`
-	elseif secs < 7 * 86400 then
+	elseif secs < 7 * 86400 or type(ts) == "number" then
 		return `{secs // 86400} d ago`
 	end
 	return M.when(ts)
@@ -172,9 +173,13 @@ function M.summary(l: any): Summary?
 	}
 end
 
+-- The tone a status or severity is drawn in.
+function M.tone(status: any): string
+	return STATUS_TONE[str(status)] or "muted"
+end
+
 function M.badge(status: any): BadgeCell
-	local s = str(status)
-	return { badge = { text = s, tone = STATUS_TONE[s] or "muted" } }
+	return { badge = { text = str(status), tone = M.tone(status) } }
 end
 
 export type Items = { any }
@@ -193,7 +198,11 @@ function M.items(data: any): Items?
 	return nil
 end
 
-function M.launches_table(items: Items, opts: { selected: string?, max: number? }?): Node
+-- `now` (Unix seconds) shows ages ("12 min ago") instead of dates; `buttons =
+-- false` drops the trailing open button (the tab opens the selected row).
+function M.launches_table(items: Items, opts: { selected: string?, max: number?, now: number?, buttons: boolean? }?): Node
+	local now = if opts then opts.now else nil
+	local buttons = not (opts and opts.buttons == false)
 	local cols: { Col } = {
 		{ id = "seq", head = "#", mono = true, align = "end" },
 		{ id = "status", head = "Status" },
@@ -201,9 +210,11 @@ function M.launches_table(items: Items, opts: { selected: string?, max: number? 
 		{ id = "counts", head = "Passed / failed / skipped", mono = true, priority = -1 },
 		{ id = "env", head = "Environment", priority = -2 },
 		{ id = "branch", head = "Branch", mono = true, priority = -3, truncate = "middle" },
-		{ id = "created", head = "Created", mono = true, priority = -1 },
-		{ id = "open", head = "" },
+		{ id = "created", head = if now then "Age" else "Created", mono = true, priority = -1 },
 	}
+	if buttons then
+		table.insert(cols, { id = "open", head = "" })
+	end
 	local rows: { TableRow } = {}
 	local max = if opts and opts.max then opts.max else 200
 	for i, l in items do
@@ -212,21 +223,21 @@ function M.launches_table(items: Items, opts: { selected: string?, max: number? 
 		end
 		local total = num(l.totalCount)
 		local passed = num(l.passedCount)
-		local failed = num(l.failedCount) + num(l.errorCount) + num(l.timeoutCount)
+		local failed = M.failed(l)
 		local rate = if total > 0 then passed / total else 0
-		table.insert(rows, {
-			id = "launch=" .. str(l.seq),
-			cells = ({
-				"#" .. str(l.seq),
-				M.badge(l.status),
-				ui.meter_cell(rate),
-				`{passed} / {failed} / {num(l.skippedCount)}`,
-				str(l.environmentName),
-				str(l.branch),
-				M.when(l.createdAt),
-				{ button = { text = "", icon = "open", act = "launch=" .. str(l.seq) } },
-			} :: { Cell }),
-		})
+		local cells: { Cell } = {
+			"#" .. str(l.seq),
+			M.badge(l.status),
+			ui.meter_cell(rate),
+			`{passed} / {failed} / {num(l.skippedCount)}`,
+			str(l.environmentName),
+			str(l.branch),
+			if now then M.ago(l.createdAt, now) else M.when(l.createdAt),
+		}
+		if buttons then
+			table.insert(cells, { button = { text = "", icon = "open", act = "launch=" .. str(l.seq) } })
+		end
+		table.insert(rows, { id = "launch=" .. str(l.seq), cells = cells })
 	end
 	local out = ui.table(cols, rows, {
 		selectable = true,
