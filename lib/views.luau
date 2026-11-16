@@ -69,6 +69,109 @@ function M.when(ts: any): string
 	return if d then `{d} {t}` else s
 end
 
+-- Days since 1970-01-01 for a civil date (Howard Hinnant's days_from_civil).
+local function days_from_civil(y: number, m: number, d: number): number
+	if m <= 2 then
+		y -= 1
+	end
+	local era = y // 400
+	local yoe = y - era * 400
+	local mp = if m > 2 then m - 3 else m + 9
+	local doy = (153 * mp + 2) // 5 + d - 1
+	local doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+	return era * 146097 + doe - 719468
+end
+
+-- An ISO-8601 UTC timestamp ("2026-10-28T12:24:11.911391Z") as Unix seconds.
+function M.epoch(ts: any): number?
+	local y, mo, d, h, mi, se = string.match(str(ts), "^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)")
+	if y == nil then
+		return nil
+	end
+	local days = days_from_civil(tonumber(y) :: number, tonumber(mo) :: number, tonumber(d) :: number)
+	return days * 86400 + (tonumber(h) :: number) * 3600 + (tonumber(mi) :: number) * 60 + (tonumber(se) :: number)
+end
+
+-- "just now", "5 min ago", "3 h ago", "2 d ago", then the date from a week on.
+function M.ago(ts: any, now: number): string
+	local t = M.epoch(ts)
+	if t == nil then
+		return ""
+	end
+	local secs = math.max(0, now - t)
+	if secs < 60 then
+		return "just now"
+	elseif secs < 3600 then
+		return `{secs // 60} min ago`
+	elseif secs < 86400 then
+		return `{secs // 3600} h ago`
+	elseif secs < 7 * 86400 then
+		return `{secs // 86400} d ago`
+	end
+	return M.when(ts)
+end
+
+-- Failures of any kind in a launch: failed, errored and timed out.
+function M.failed(l: any): number
+	return num(l.failedCount) + num(l.errorCount) + num(l.timeoutCount)
+end
+
+export type Summary = { text: string, risk: string?, why: string?, areas: { string }, recommendations: { string } }
+
+-- One line for an item of `failingAreas` or `recommendations`: a string, or
+-- a table with a name (`area`, `name`, `title`) and maybe a `description`.
+local function line_of(v: any): string?
+	if type(v) == "string" then
+		return if v ~= "" then v else nil
+	end
+	if type(v) ~= "table" then
+		return nil
+	end
+	local name = v.area or v.name or v.title or v.text
+	local desc = v.description or v.detail
+	if type(name) == "string" and type(desc) == "string" and desc ~= "" then
+		return `{name}: {desc}`
+	end
+	return if type(name) == "string" then name elseif type(desc) == "string" then desc else nil
+end
+
+local function lines_of(v: any): { string }
+	local out: { string } = {}
+	if type(v) == "table" then
+		for _, item in v do
+			local l = line_of(item)
+			if l then
+				table.insert(out, l)
+			end
+		end
+	end
+	return out
+end
+
+-- Qualflare's AI summary of a launch (`aiSummary`, a JSON string), or nil
+-- while there is none, it is still pending, or it doesn't parse.
+function M.summary(l: any): Summary?
+	local raw = l.aiSummary
+	if type(raw) ~= "string" then
+		return nil
+	end
+	local ok, data = pcall(tern.json.decode, raw)
+	if not ok or type(data) ~= "table" then
+		return nil
+	end
+	local text = data.executiveSummary
+	if type(text) ~= "string" or text == "" then
+		return nil
+	end
+	return {
+		text = text,
+		risk = if type(data.riskLevel) == "string" then data.riskLevel else nil,
+		why = if type(data.riskJustification) == "string" then data.riskJustification else nil,
+		areas = lines_of(data.failingAreas),
+		recommendations = lines_of(data.recommendations),
+	}
+end
+
 function M.badge(status: any): BadgeCell
 	local s = str(status)
 	return { badge = { text = s, tone = STATUS_TONE[s] or "muted" } }

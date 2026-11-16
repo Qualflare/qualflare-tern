@@ -3,6 +3,8 @@ local S = require("./stub")
 local detect = require("../lib/detect")
 local project = require("../lib/project")
 local qf = require("../lib/qf")
+local views = require("../lib/views")
+local links = require("../lib/links")
 
 local passed, failed, pending = 0, 0, 0
 local function test(name: string, fn: () -> ())
@@ -399,6 +401,78 @@ else
 		end)
 	end
 end
+
+
+---------------------------------------------------------------------------
+-- Qualflare tab helpers
+---------------------------------------------------------------------------
+
+test("views.ago buckets relative times", function()
+	local t = views.epoch("2026-11-16T12:00:00Z") :: number
+	eq(views.epoch("2026-11-16T12:00:00.123456Z"), t)
+	eq(views.ago("2026-11-16T12:00:00Z", t + 30), "just now")
+	eq(views.ago("2026-11-16T12:00:00Z", t + 300), "5 min ago")
+	eq(views.ago("2026-11-16T12:00:00Z", t + 3 * 3600), "3 h ago")
+	eq(views.ago("2026-11-16T12:00:00Z", t + 2 * 86400), "2 d ago")
+	eq(views.ago("2026-11-16T12:00:00Z", t + 8 * 86400), "2026-11-16 12:00")
+	eq(views.ago(nil, t), "")
+	eq(views.epoch("2000-03-01T00:00:00Z"), 951868800) -- leap-year arithmetic
+end)
+
+test("views.failed adds failures, errors and timeouts", function()
+	eq(views.failed({ failedCount = 7, errorCount = 1, timeoutCount = 2 }), 10)
+	eq(views.failed({}), 0)
+end)
+
+test("views.summary tolerates null, pending and bad JSON", function()
+	eq(views.summary({}), nil)
+	eq(views.summary({ aiSummary = tern.json.null }), nil)
+	eq(views.summary({ aiSummary = "not json" }), nil)
+	eq(views.summary({ aiSummary = '{"executiveSummary":""}' }), nil)
+	local s = views.summary({ aiSummary = '{"executiveSummary":"Checkout broke.","riskLevel":"medium","riskJustification":"Payments fail.","failingAreas":[{"area":"checkout","description":"card form"}, "login"],"recommendations":["Fix the form."]}' }) :: any
+	eq(s.text, "Checkout broke.")
+	eq(s.risk, "medium")
+	eq(s.why, "Payments fail.")
+	eq(#s.areas, 2)
+	has(s.areas[1], "checkout")
+	has(s.areas[1], "card form")
+	eq(s.areas[2], "login")
+	eq(s.recommendations[1], "Fix the form.")
+end)
+
+test("links parse launch URLs and the bridge", function()
+	local l = links.launch_from_url("https://app.qualflare.com/project/acme-web/launches?p=launch&p.seq=128") :: any
+	eq(l.slug, "acme-web")
+	eq(l.seq, 128)
+	local l2 = links.launch_from_url("https://app.qualflare.com/project/acme-web/launches?p.seq=7&p=launch") :: any
+	eq(l2.seq, 7)
+	eq(links.launch_from_url("https://app.qualflare.com/project/acme-web/launches"), nil)
+	eq(links.launch_from_url("https://example.com/project/x/launches?p.seq=1"), nil)
+	S.kv.slugs = { web = "acme-web" }
+	eq(links.identifier_for("acme-web", { "api", "web" }), "web")
+	eq(links.identifier_for("api", { "api", "web" }), "api")
+	eq(links.identifier_for("nope", { "api", "web" }), nil)
+	S.kv.slugs = nil
+	local u = links.bridge("fix", { id = "web", root = "/w/my repo" })
+	eq(u, "qualflare-tern:fix?id=web&root=%2Fw%2Fmy%20repo")
+	local action, params = links.parse_bridge(u)
+	eq(action, "fix")
+	eq(params.root, "/w/my repo")
+	eq((links.parse_bridge("https://x")), nil)
+end)
+
+test("qf.lines returns trimmed non-empty lines", function()
+	S.kv.qf_path = "/bin/qf"
+	qf.reset()
+	S.process["/bin/qf projects"] = { status = 0, stdout = "app-landing\n stage\n\nstarter\n", stderr = "", timed_out = false }
+	local got: any
+	qf.lines({ "projects" }, nil, function(r)
+		got = r
+	end)
+	eq(got.ok, true)
+	eq(#got.lines, 3)
+	eq(got.lines[2], "stage")
+end)
 
 print(`{passed} passed, {failed} failed, {pending} pending`)
 if failed > 0 then

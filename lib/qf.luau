@@ -69,17 +69,36 @@ end
 
 export type Result = { ok: boolean, data: any?, status: number, err: string? }
 
--- Runs a read command (`qf <id> launches list`, …) and decodes its JSON.
-function M.read(args: { string }, cwd: string?, cb: (Result) -> ())
+-- Runs `qf <args>`; spawn failures (almost always `qf` missing) come back as
+-- status 127 with an install hint.
+local function spawn(args: { string }, cwd: string?, cb: (ProcessResult?, string?) -> ())
 	local argv = { M.bin() }
 	for _, a in args do
 		table.insert(argv, a)
 	end
 	local ok, err = pcall(function()
 		tern.process.run(argv, { cwd = cwd, timeout_ms = 20000 }, function(res: ProcessResult)
+			cb(res, nil)
+		end)
+	end)
+	if not ok then
+		cb(nil, "Can't run qf (" .. tostring(err) .. "). Install it with `brew install qualflare/tap/qf`.")
+	end
+end
+
+local function first_error_line(res: ProcessResult): string
+	return string.match(res.stderr, "[^\n]+") or ("exit " .. res.status)
+end
+
+-- Runs a read command (`qf <id> launches list`, …) and decodes its JSON.
+function M.read(args: { string }, cwd: string?, cb: (Result) -> ())
+	spawn(args, cwd, function(res, spawn_err)
+		if res == nil then
+			cb({ ok = false, status = 127, err = spawn_err })
+			return
+		end
 		if res.status ~= 0 then
-			local msg = string.match(res.stderr, "[^\n]+") or ("exit " .. res.status)
-			cb({ ok = false, status = res.status, err = msg })
+			cb({ ok = false, status = res.status, err = first_error_line(res) })
 			return
 		end
 		local dok, data = pcall(tern.json.decode, res.stdout)
@@ -88,12 +107,32 @@ function M.read(args: { string }, cwd: string?, cb: (Result) -> ())
 			return
 		end
 		cb({ ok = true, status = 0, data = data })
-		end)
 	end)
-	if not ok then
-		-- Spawn failures raise: almost always `qf` missing.
-		cb({ ok = false, status = 127, err = "Can't run qf (" .. tostring(err) .. "). Install it with `brew install qualflare/tap/qf`." })
-	end
+end
+
+export type Lines = { ok: boolean, lines: { string }, status: number, err: string? }
+
+-- Runs a command that prints plain lines (`qf projects`): its non-empty
+-- lines, trimmed.
+function M.lines(args: { string }, cwd: string?, cb: (Lines) -> ())
+	spawn(args, cwd, function(res, spawn_err)
+		if res == nil then
+			cb({ ok = false, lines = {}, status = 127, err = spawn_err })
+			return
+		end
+		if res.status ~= 0 then
+			cb({ ok = false, lines = {}, status = res.status, err = first_error_line(res) })
+			return
+		end
+		local out: { string } = {}
+		for line in string.gmatch(res.stdout, "[^\n]+") do
+			local t = string.match(line, "^%s*(.-)%s*$")
+			if t and t ~= "" then
+				table.insert(out, t)
+			end
+		end
+		cb({ ok = true, lines = out, status = 0 })
+	end)
 end
 
 -- Quotes `s` for a POSIX shell.
