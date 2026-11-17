@@ -270,6 +270,9 @@ local function card(l: any, s: TabState): Node
 	c.p = c.p or {}
 	;(c.p :: any).key = "detail"
 	;(c.p :: any).grow = 1
+	-- Starting widths (60% table, 36% card, plus the gap) fit one row, so
+	-- the card only wraps under the table when the minimum widths don't fit.
+	;(c.p :: any).basis = 0.36
 	;(c.p :: any).min = { w = "36ch" }
 	;(c.p :: any).max = { w = "60ch" }
 	return c
@@ -348,7 +351,7 @@ function M.view(s: TabState): BlockView
 		if s.more then
 			table.insert(left, ui.button("Show more", { key = "more", variant = "quiet", size = "sm", busy = s.loading, actions = { click = "more" } }))
 		end
-		local row: { Node } = { ui.node("col", { key = "list", gap = "sm", grow = 2, min = { w = "44ch" } }, left) }
+		local row: { Node } = { ui.node("col", { key = "list", gap = "sm", grow = 2, basis = 0.6, min = { w = "44ch" } }, left) }
 		if l then
 			table.insert(row, card(l, s))
 		end

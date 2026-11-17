@@ -255,20 +255,33 @@ end
 function M.launches_table(items: Items, opts: { selected: string?, max: number?, now: number?, buttons: boolean? }?): Node
 	local now = if opts then opts.now else nil
 	local buttons = not (opts and opts.buttons == false)
+	local max = if opts and opts.max then opts.max else 200
+	-- A column no shown run fills is only noise.
+	local has_env, has_branch = false, false
+	for i, l in items do
+		if i > max then
+			break
+		end
+		has_env = has_env or str(l.environmentName) ~= ""
+		has_branch = has_branch or str(l.branch) ~= ""
+	end
 	local cols: { Col } = {
 		{ id = "seq", head = "#", mono = true, align = "end" },
 		{ id = "status", head = "Status" },
 		{ id = "pass", head = "Pass rate", grow = 1 },
 		{ id = "counts", head = "Passed / failed / skipped", mono = true, priority = -1 },
-		{ id = "env", head = "Environment", priority = -2 },
-		{ id = "branch", head = "Branch", mono = true, priority = -3, truncate = "middle" },
-		{ id = "created", head = if now then "Age" else "Created", mono = true, priority = -1 },
 	}
+	if has_env then
+		table.insert(cols, { id = "env", head = "Environment", priority = -2 })
+	end
+	if has_branch then
+		table.insert(cols, { id = "branch", head = "Branch", mono = true, priority = -3, truncate = "middle" })
+	end
+	table.insert(cols, { id = "created", head = if now then "Age" else "Created", mono = true, priority = -1 })
 	if buttons then
 		table.insert(cols, { id = "open", head = "" })
 	end
 	local rows: { TableRow } = {}
-	local max = if opts and opts.max then opts.max else 200
 	for i, l in items do
 		if i > max then
 			break
@@ -282,10 +295,14 @@ function M.launches_table(items: Items, opts: { selected: string?, max: number?,
 			M.badge(l.status),
 			ui.meter_cell(rate),
 			`{passed} / {failed} / {num(l.skippedCount)}`,
-			str(l.environmentName),
-			str(l.branch),
-			if now then M.ago(l.createdAt, now) else M.when(l.createdAt),
 		}
+		if has_env then
+			table.insert(cells, str(l.environmentName))
+		end
+		if has_branch then
+			table.insert(cells, str(l.branch))
+		end
+		table.insert(cells, if now then M.ago(l.createdAt, now :: number) else M.when(l.createdAt))
 		if buttons then
 			table.insert(cells, { button = { text = "", icon = "open", act = "launch=" .. str(l.seq) } })
 		end

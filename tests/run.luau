@@ -1023,6 +1023,35 @@ test("tab: launches page has head, verdict, change, trend, table and the selecte
 	eq(find(v.main, keyed("launches")).p.wrap, true, "table and card wrap in a narrow pane")
 end)
 
+test("tab: table and card share the row by starting widths, so the card sits beside the table", function()
+	local launches = (tern.json.decode(LAUNCHES) :: any).items
+	local v = tab.view(st({ launches = launches }))
+	local list = find(v.main, keyed("list"))
+	local card = find(v.main, keyed("detail"))
+	eq(list.p.basis, 0.6)
+	eq(card.p.basis, 0.36)
+	-- room for both: 60% + 36% + the gap fits, so wrap only kicks in when the minimums don't
+	assert(list.p.basis + card.p.basis < 1)
+end)
+
+test("views: launches table hides Branch and Environment when no run has one", function()
+	local function heads(n: any): string
+		local t = {}
+		for _, c in n.p.cols do
+			table.insert(t, c.head)
+		end
+		return table.concat(t, ",")
+	end
+	local bare = views.launches_table({ { seq = 1, status = "passed", environmentName = "Staging", branch = tern.json.null } }, { now = 0, buttons = false })
+	no(heads(bare), "Branch")
+	has(heads(bare), "Environment")
+	eq(#bare.p.rows[1].cells, #bare.p.cols, "one cell per column")
+	local full = views.launches_table({ { seq = 1, status = "passed", branch = "main" } }, { now = 0 })
+	has(heads(full), "Branch")
+	no(heads(full), "Environment")
+	eq(#full.p.rows[1].cells, #full.p.cols)
+end)
+
 test("tab: verdict reads failing, passed and other states", function()
 	local launches = (tern.json.decode(LAUNCHES) :: any).items
 	local now = 1763294400
