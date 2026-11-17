@@ -127,3 +127,53 @@ Pass rate 94% │ Failed 6 │ Flaky 2 │ Last run 12 min ago
 - Exact column priorities and widths, and the meter cell's look.
 - Whether the old split-pane layout of the launches block survives as anything
   other than this page. Proposal: it doesn't; one block, one page.
+
+## Version 2 (2026-11-17): a pane that answers three questions
+
+Approved by the owner after trying 0.2.0: "Be creative." The pane now opens
+beside the focused pane (`"beside"`), not as a tab. It answers: is my latest
+run OK, is it getting better or worse, and where should I look.
+
+```text
+Qualflare  app-landing ▾  · updated just now                 Upload U   Refresh R
+✗ 6 of 120 failing · feat/checkout · Staging · 12 min ago   new
+  +2 tests · 4 more failing than #41
+Pass rate, last 20 runs  ▂▅▇█▇█▃█
+┌ Launches table ──────────────┐ ┌ #42 · feat/checkout · Staging     failed ┐
+│ …                            │ │ AI summary, risk, areas, recommendations  │
+└──────────────────────────────┘ │ junit · darwin/arm64 · 2026-11-15 14:32   │
+                                 │ [Open on website] [Fix with omp]          │
+Where to look
+  high  TimeoutError waiting for #pay-button   5   2 h ago   ↗
+```
+
+1. **Verdict line** replaces the four stat tiles. From the newest launch:
+   failing launches read `✗ <failed> of <total> failing · <branch> · <env> ·
+   <age>`, passing ones `✓ Latest run passed · <total> tests · <env> · <age>`,
+   anything else `● Latest run <status> · …`. Missing fields are left out.
+   When the newest run is older than 7 days, a second line says `No runs in
+   <n> days.` and how to upload.
+2. **What changed:** a muted line comparing the newest launch with the one
+   before it: test-count delta and failing delta (`+2 tests · 4 more failing
+   than #41`, or `Same counts as #41`).
+3. **Trend:** a `chart` of kind `bars` for up to the 20 newest launches,
+   oldest on the left, height = pass rate (0–100), red for runs with failures,
+   a tooltip per bar. Shown with two or more launches.
+4. **Where to look:** when the newest launch has failures, the three most
+   recently seen failure clusters (`qf <id> clusters list --sort-by lastSeenAt
+   --sort-desc`) in the existing clusters table; a row opens the cluster on the
+   website. A failed clusters call just hides the section.
+5. **Live updates:** when `qf <id> collect` finishes successfully in any
+   terminal, every open Qualflare pane on that project refreshes at once,
+   selects the new launch and marks it `new` until the next refresh. If the new
+   launch isn't listed yet, it retries once 5 s later.
+6. **Polish and narrow panes:** ages instead of dates (`19 d ago` up to 30
+   days, then `Oct 28`, or `Oct 28, 2025` in another year); the card's status is
+   a small badge at its head end; no "no branch"; the risk badge on its own line
+   with the reason under it in normal text; recommendations and failing areas
+   wrap; the card drops the progress bar the table already shows, and its facts
+   become one muted line; the table and card wrap onto two rows when the pane is
+   too narrow for both.
+
+Unchanged: per-test results stay on the website, and the pane never changes
+anything on the server.
