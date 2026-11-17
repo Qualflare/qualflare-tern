@@ -1335,9 +1335,6 @@ test("dashboard view: states", function()
 	local old = S.text(dashboard.view(dst({ outdated = true })).main)
 	has(old, "Update qf to use the dashboard")
 	has(old, "brew install qualflare/tap/qf")
-	local data = tern.json.decode(OVERVIEW) :: any
-	data.dataThrough = tern.json.null
-	has(S.text(dashboard.view(dst({ data = data })).main), "No metrics yet")
 	has(S.text(dashboard.view(dst({ data = tern.json.decode(OVERVIEW), now = OV_NOW + 45 * 60 })).main), "haven't updated")
 end)
 
@@ -1467,6 +1464,64 @@ test("window: Show dashboard and the bridge open the dashboard beside", function
 	eq(S.routes[1]({ url = "qualflare-tern:dashboard?id=..%2Fx", pane = 3, mods = {} }, wcx).handled, true)
 	eq(#wcx.blocks, 2)
 	S.panes = {}
+end)
+
+test("review: an unknown data age keeps the cards; all-empty numbers explain why", function()
+	local data = tern.json.decode(OVERVIEW) :: any
+	data.dataThrough = tern.json.null
+	local v = dashboard.view(dst({ data = data }))
+	assert(find(v.main, keyed("successRate")), "the cards stay when only the data age is unknown")
+	has(S.text(v.main), "data age unknown")
+	no(S.text(v.main), "No metrics yet")
+	local empty = tern.json.decode(OVERVIEW) :: any
+	for _, k in empty.kpis do
+		k.latest = tern.json.null
+	end
+	local e = dashboard.view(dst({ data = empty }))
+	has(S.text(e.main), "No metrics yet")
+	assert(find(e.main, keyed("successRate")), "cards still drawn")
+end)
+
+test("review: switching window never shows the other window's numbers as its own", function()
+	dash_projects()
+	local B = S.blocks.dashboard
+	local cx = S.block_cx(110, nil)
+	local s = B.init(cx, { "demo-app" }, nil)
+	eq(s.data.window.days, 7)
+	S.defer = true
+	B.key(s, key("w"), cx) -- 28 days asked, not answered yet
+	eq(s.days, 28)
+	eq(s.data, nil, "no 7-day numbers under the 28-day button while it loads")
+	has(S.kind_list(B.view(s, cx).main), "skeleton")
+	S.deferred = {}
+	S.defer = false
+	-- the 28-day request fails: still no 7-day numbers shown as 28
+	S.process["/bin/qf demo-app overview --days 28"] = { status = 7, stdout = "", stderr = "Error: timeout", timed_out = false }
+	B.event(s, { ev = "action", act = "refresh" }, cx)
+	eq(s.data, nil)
+	eq(s.status, 7)
+	-- back to 7 shows the 7-day numbers it already has, at once
+	S.defer = true
+	B.key(s, key("w"), cx)
+	eq(s.data.window.days, 7)
+	S.deferred = {}
+	S.defer = false
+	-- a save that mixes windows comes back without the mismatched numbers
+	local back = B.init(S.block_cx(111, nil), { "demo-app" }, { identifier = "demo-app", days = 28, data = tern.json.decode(OVERVIEW) })
+	assert(back.data == nil or back.data.window.days == 28, "restored data must match the window")
+end)
+
+test("review: target-coloured headlines keep the title style; open on website; caption", function()
+	local v = dashboard.view(dst({ data = tern.json.decode(OVERVIEW) }))
+	local card = find(v.main, keyed("successRate"))
+	local span = find(card, function(n)
+		return n.k == "text" and n.p.spans and n.p.spans[1] and n.p.spans[1].t == "94.3%"
+	end)
+	eq(span.p.spans[1].s, "title error")
+	assert(find(v.main, function(n)
+		return n.k == "button" and n.p.props and n.p.props.key == "open"
+	end), "an Open on website button")
+	has(S.text(v.main), "daily average of the 7 days before")
 end)
 
 print(`{passed} passed, {failed} failed, {pending} pending`)

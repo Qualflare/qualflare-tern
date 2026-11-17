@@ -130,6 +130,7 @@ local function head(s: DashState): Node
 		ui.node("row", { key = "end", gap = "sm", align = "center" }, {
 			window(7),
 			window(28),
+			ui.button("Open on website", { key = "open", icon = "open", keys = { "enter" }, disabled = s.identifier == nil, actions = { click = "open" } }),
 			ui.button("Launches", { key = "launches", icon = "list-checks", keys = { "l" }, disabled = s.identifier == nil, actions = { click = "launches" } }),
 			ui.button("Refresh", { key = "refresh", icon = "repeat", keys = { "r" }, busy = s.loading, disabled = s.identifier == nil, actions = { click = "refresh" } }),
 		}),
@@ -154,7 +155,7 @@ end
 local function card(kpi: any, buckets: { any }): Node
 	local verdict = M.meets(kpi)
 	local tone = if verdict == true then "success" elseif verdict == false then "error" else nil
-	local top: { Node } = { ui.text({ ui.span(M.headline(kpi), tone or "title") }) }
+	local top: { Node } = { ui.text({ ui.span(M.headline(kpi), if tone then "title " .. tone else "title") }) }
 	local change = M.change(kpi)
 	if change then
 		local c = change :: { text: string, tone: string }
@@ -216,27 +217,38 @@ function M.view(s: DashState): BlockView
 		}))
 	elseif data == nil then
 		table.insert(parts, ui.node("skeleton", { key = "cards-loading", shape = "card", tiles = 6 }))
-	elseif type(data.dataThrough) ~= "string" then
-		table.insert(parts, empty({
-			icon = "inbox",
-			title = "No metrics yet",
-			text = `They appear a few minutes after the first upload. Upload results with qf {id} collect.`,
-		}))
 	else
-		local through = views.epoch(data.dataThrough)
-		if through and s.now - (through :: number) > STALE_S then
-			table.insert(parts, ui.text({ ui.span(`Metrics haven't updated since {views.ago(data.dataThrough, s.now)}.`, "warning") }))
+		local kpis: { any } = if type(data.kpis) == "table" then data.kpis else {}
+		if type(data.dataThrough) == "string" then
+			local through = views.epoch(data.dataThrough)
+			if through and s.now - (through :: number) > STALE_S then
+				table.insert(parts, ui.text({ ui.span(`Metrics haven't updated since {views.ago(data.dataThrough, s.now)}.`, "warning") }))
+			end
+		else
+			-- The numbers came, but not how fresh they are (the server couldn't
+			-- read the rollup's watermark, or it has never run).
+			table.insert(parts, ui.text({ ui.span("Metrics data age unknown.", "muted") }))
 		end
 		if s.error then
 			table.insert(parts, ui.text({ ui.span(s.error :: string, "error") }))
 		end
+		local any = false
+		for _, kpi in kpis do
+			if number(kpi.latest) ~= nil then
+				any = true
+			end
+		end
+		if not any then
+			table.insert(parts, ui.text({ ui.span(`No metrics yet. They appear a few minutes after the first upload: qf {id} collect.`, "muted") }))
+		end
 		local buckets = if type(data.buckets) == "table" then data.buckets else {}
 		local cards: { Node } = {}
-		for _, kpi in (if type(data.kpis) == "table" then data.kpis else {}) do
+		for _, kpi in kpis do
 			table.insert(cards, card(kpi, buckets))
 		end
 		table.insert(parts, ui.node("row", { key = "cards", gap = "lg", align = "start", wrap = true }, cards))
-		table.insert(parts, ui.text({ ui.span(`Each card compares with the previous {s.days} days. Launches and defects count today (UTC).`, "muted") }))
+		local n = if type(data.window) == "table" and type(data.window.days) == "number" then data.window.days else s.days
+		table.insert(parts, ui.text({ ui.span(`Change: the latest day against the daily average of the {n} days before. Launches and defects count today (UTC).`, "muted") }))
 	end
 
 	return {

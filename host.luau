@@ -828,6 +828,9 @@ type DashBlock = dashboard.DashState & {
 	timer: TimerHandle?,
 	-- bumped per qf overview request; older answers are dropped
 	req: number,
+	-- the last answer per window (7, 28), so switching back shows numbers at
+	-- once and never shows one window's numbers under the other's label
+	cache: { [number]: any },
 }
 
 local function dash_refresh(s: DashBlock, cx: BlockCx)
@@ -845,7 +848,10 @@ local function dash_refresh(s: DashBlock, cx: BlockCx)
 		s.loading = false
 		s.now = os.time()
 		if r.ok and type(r.data) == "table" and type(r.data.kpis) == "table" then
-			s.data = r.data
+			local w = r.data.window
+			local answered = if type(w) == "table" and (w.days == 7 or w.days == 28) then w.days else days
+			s.cache[answered] = r.data
+			s.data = s.cache[s.days]
 			s.error, s.status, s.outdated = nil, nil, false
 			s.refreshed = s.now
 		elseif r.ok or r.status == 0 then
@@ -905,6 +911,7 @@ local function dash_set_project(s: DashBlock, cx: BlockCx, id: string)
 	end
 	s.identifier = id
 	s.data, s.error, s.status, s.outdated, s.refreshed = nil, nil, nil, false, nil
+	s.cache = {}
 	dash_refresh(s, cx)
 	dash_schedule(s, cx)
 	cx:save()
@@ -915,6 +922,7 @@ local function dash_set_days(s: DashBlock, cx: BlockCx, days: number)
 		return
 	end
 	s.days = days
+	s.data = s.cache[days]
 	dash_refresh(s, cx)
 	cx:save()
 end
@@ -931,11 +939,17 @@ tern.block.define("dashboard", {
 			menu_open = false,
 			cwd = cx.cwd,
 			req = 0,
+			cache = {},
 		}
 		if type(saved) == "table" then
 			s.identifier = saved.identifier
 			s.days = if saved.days == 28 then 28 else 7
-			s.data = saved.data
+			-- Only numbers saved for this window; anything else is dropped.
+			local d = saved.data
+			if type(d) == "table" and type(d.window) == "table" and d.window.days == s.days then
+				s.data = d
+				s.cache[s.days] = d
+			end
 			s.refreshed = saved.refreshed
 		elseif args[1] and args[1] ~= "" then
 			s.identifier = args[1]
