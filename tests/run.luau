@@ -6,6 +6,7 @@ local qf = require("../lib/qf")
 local views = require("../lib/views")
 local links = require("../lib/links")
 local tab = require("../lib/tab")
+local dashboard = require("../lib/dashboard")
 
 local passed, failed, pending = 0, 0, 0
 local function test(name: string, fn: () -> ())
@@ -1210,6 +1211,138 @@ test("tab: loading, error and no-project states", function()
 	-- stale data stays on screen while a refresh runs
 	local launches = (tern.json.decode(LAUNCHES) :: any).items
 	has(S.text(tab.view(st({ loading = true, launches = launches })).main), "8 of 120 failing")
+end)
+
+---------------------------------------------------------------------------
+-- Qualflare dashboard
+---------------------------------------------------------------------------
+
+local OVERVIEW = [[{
+  "window": {"from": "2026-11-11", "to": "2026-11-17", "days": 7},
+  "buckets": ["2026-11-11","2026-11-12","2026-11-13","2026-11-14","2026-11-15","2026-11-16","2026-11-17"],
+  "kpis": [
+    {"key":"successRate","label":"Success rate","unit":"percent","latest":94.26,"previous":91,"percentChange":3.5,"trend":"up","target":95,"values":[90,null,92,93,94,94,94.26]},
+    {"key":"flakeRate","label":"Flake rate","unit":"percent","latest":1,"previous":1.5,"percentChange":-33.3,"trend":"down","target":2,"values":[1,1,1,1,1,1,1]},
+    {"key":"launchP90","label":"Launch p90","unit":"seconds","latest":252,"previous":233,"percentChange":8,"trend":"up","target":null,"values":[230,240,250,252,252,252,252]},
+    {"key":"automationRate","label":"Automation","unit":"percent","latest":63.4,"previous":63.4,"percentChange":0,"trend":"none","target":null,"values":[63,63,63,63,63,63,63.4]},
+    {"key":"defectsOpened","label":"Defects opened","unit":"count","latest":2,"previous":1,"percentChange":100,"trend":"up","target":null,"values":[0,1,0,2,1,0,2]},
+    {"key":"launches","label":"Launches","unit":"count","latest":5,"previous":4,"percentChange":25,"trend":"up","target":null,"values":[3,4,5,4,3,4,5]}
+  ],
+  "warnings": [],
+  "dataThrough": "2026-11-17T09:00:00Z"
+}]]
+local OV_NOW = 1794906000 -- 2026-11-17T09:00:00Z
+
+local function dst(over: any): any
+	local s: any = { identifier = "demo-app", projects = { "demo-app", "web" }, days = 7, data = nil, outdated = false, loading = false, now = OV_NOW + 300, menu_open = false }
+	for k, v in over do
+		s[k] = v
+	end
+	return s
+end
+
+test("dashboard.headline formats each unit", function()
+	eq(dashboard.headline({ key = "successRate", unit = "percent", latest = 94.26 }), "94.3%")
+	eq(dashboard.headline({ key = "automationRate", unit = "percent", latest = 63.4 }), "63%")
+	eq(dashboard.headline({ key = "launchP90", unit = "seconds", latest = 42 }), "42s")
+	eq(dashboard.headline({ key = "launchP90", unit = "seconds", latest = 252 }), "4m 12s")
+	eq(dashboard.headline({ key = "launchP90", unit = "seconds", latest = 3780 }), "1h 3m")
+	eq(dashboard.headline({ key = "launches", unit = "count", latest = 5 }), "5 today")
+	eq(dashboard.headline({ key = "successRate", unit = "percent", latest = nil }), "–")
+	eq(dashboard.headline({ key = "successRate", unit = "percent", latest = tern.json.null }), "–")
+end)
+
+test("dashboard.change colours by whether the direction is good", function()
+	local none = dashboard.change({ key = "automationRate", trend = "none", percentChange = 0 }) :: any
+	eq(none.text, "no change")
+	eq(none.tone, "muted")
+	eq(dashboard.change({ key = "successRate", trend = "neutral", percentChange = nil }), nil)
+	local up = dashboard.change({ key = "successRate", trend = "up", percentChange = 3.5 }) :: any
+	eq(up.text, "▲ 3.5%")
+	eq(up.tone, "success")
+	eq((dashboard.change({ key = "flakeRate", trend = "up", percentChange = 2 }) :: any).tone, "error")
+	eq((dashboard.change({ key = "launchP90", trend = "down", percentChange = -8 }) :: any).tone, "success")
+	eq((dashboard.change({ key = "launches", trend = "up", percentChange = 25 }) :: any).tone, "muted")
+	eq((dashboard.change({ key = "defectsOpened", trend = "down", percentChange = -3.26 }) :: any).text, "▼ 3.3%")
+end)
+
+test("dashboard.meets compares against the target the website's way", function()
+	eq(dashboard.meets({ key = "successRate", latest = 94, target = 95 }), false)
+	eq(dashboard.meets({ key = "flakeRate", latest = 1, target = 2 }), true)
+	eq(dashboard.meets({ key = "launchP90", latest = 300, target = 300 }), true)
+	eq(dashboard.meets({ key = "successRate", latest = 94, target = nil }), nil)
+	eq(dashboard.meets({ key = "successRate", latest = nil, target = 95 }), nil)
+	eq(dashboard.meets({ key = "launches", latest = 5, target = 3 }), nil)
+end)
+
+test("dashboard view: six cards with lines, data age and the window buttons", function()
+	local v = dashboard.view(dst({ data = tern.json.decode(OVERVIEW), refreshed = OV_NOW }))
+	local t = S.text(v.main)
+	for _, k in { "successRate", "flakeRate", "launchP90", "automationRate", "defectsOpened", "launches" } do
+		local card = find(v.main, keyed(k))
+		assert(card, "card " .. k)
+		assert(find(card, function(n)
+			return n.k == "chart" and n.p.kind == "line"
+		end), "line chart in " .. k)
+	end
+	has(t, "94.3%")
+	has(t, "4m 12s")
+	has(t, "5 today")
+	has(t, "▲ 3.5%")
+	has(t, "no change")
+	has(t, "data from 5 min ago")
+	local function button(k: string): any
+		return find(v.main, function(n)
+			return n.k == "button" and n.p.props and n.p.props.key == k
+		end)
+	end
+	local b7 = button("days7")
+	local b28 = button("days28")
+	eq(b7.p.props.variant, "primary")
+	assert(b28.p.props.variant ~= "primary", "28 days isn't the active window")
+	has(S.text(v.dock), "W window")
+	no(t, "haven't updated")
+end)
+
+test("dashboard view: a fresh project's nulls show dashes and gaps", function()
+	local data = tern.json.decode(OVERVIEW) :: any
+	for _, k in data.kpis do
+		k.latest, k.previous, k.percentChange, k.trend = tern.json.null, tern.json.null, tern.json.null, "neutral"
+		for i in k.values do
+			k.values[i] = tern.json.null
+		end
+	end
+	local v = dashboard.view(dst({ data = data }))
+	has(S.text(v.main), "–")
+	no(S.text(v.main), "▲")
+	local chart = find(find(v.main, keyed("successRate")), function(n)
+		return n.k == "chart"
+	end)
+	eq(#chart.p.series, 7)
+	eq(type(chart.p.series[1]), "table")
+	eq(chart.p.series[1].value, nil)
+end)
+
+test("dashboard view: states", function()
+	local none = dst({})
+	none.identifier = nil
+	has(S.text(dashboard.view(none).main), "No Qualflare project here")
+	local e = S.text(dashboard.view(dst({ error = "no token loaded", status = 3 })).main)
+	has(e, "Not logged in")
+	has(e, "qf login demo-app")
+	has(e, "Retry")
+	has(S.kind_list(dashboard.view(dst({ loading = true })).main), "skeleton")
+	local old = S.text(dashboard.view(dst({ outdated = true })).main)
+	has(old, "Update qf to use the dashboard")
+	has(old, "brew install qualflare/tap/qf")
+	local data = tern.json.decode(OVERVIEW) :: any
+	data.dataThrough = tern.json.null
+	has(S.text(dashboard.view(dst({ data = data })).main), "No metrics yet")
+	has(S.text(dashboard.view(dst({ data = tern.json.decode(OVERVIEW), now = OV_NOW + 45 * 60 })).main), "haven't updated")
+end)
+
+test("views.overview_url is the project home", function()
+	eq(views.overview_url("demo-app"), "https://app.qualflare.com/project/demo-app")
 end)
 
 print(`{passed} passed, {failed} failed, {pending} pending`)

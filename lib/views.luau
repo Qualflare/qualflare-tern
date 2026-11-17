@@ -37,6 +37,11 @@ function M.own(url: string): string
 	return url .. (if string.find(url, "?", 1, true) then "&" else "?") .. M.OWN
 end
 
+-- The project's home page, where the website's Overview lives.
+function M.overview_url(identifier: string): string
+	return `{APP}/project/{M.slug(identifier)}`
+end
+
 function M.project_url(identifier: string, page: string?): string
 	return `{APP}/project/{M.slug(identifier)}/{page or "launches"}`
 end
