@@ -36,6 +36,31 @@ tern.command({
 	end,
 })
 
+tern.command({
+	-- "dashboard" is the older command that opens the website.
+	id = "overview",
+	title = "Qualflare: Show dashboard",
+	icon = "list-checks",
+	run = function(cx: WindowCx)
+		local proj = focused_project(cx)
+		local args = if proj then { proj.package.identifier } else nil
+		cx:new_block("qualflare.dashboard", args, "beside")
+	end,
+})
+
+-- The Qualflare panes that may ask the window, through the bridge, to open a
+-- view or hand work over.
+local QUALFLARE_BLOCKS: { [string]: boolean } = {
+	["qualflare.launches"] = true,
+	["qualflare.dashboard"] = true,
+}
+
+-- Bridge actions that only open a view of a project: no folder needed.
+local VIEW_ACTIONS: { [string]: string } = {
+	dashboard = "qualflare.dashboard",
+	launches = "qualflare.launches",
+}
+
 local function under(path: string, root: string): boolean
 	return path == root or string.sub(path, 1, #root + 1) == root .. "/"
 end
@@ -131,7 +156,7 @@ tern.command({
 
 tern.command({
 	id = "dashboard",
-	title = "Qualflare: Open dashboard",
+	title = "Qualflare: Open website",
 	icon = "globe",
 	run = function(cx: WindowCx)
 		local proj = focused_project(cx)
@@ -226,8 +251,17 @@ tern.route.link(function(link: LinkRequest, cx: WindowCx): RouteDecision?
 	if action then
 		-- Only the Qualflare tab hands work over, and only for its own
 		-- project: a link printed anywhere else could name any folder.
-		local from_tab = info ~= nil and info.kind == "plugin" and info.block == "qualflare.launches"
+		local from_qualflare = info ~= nil and info.kind == "plugin" and QUALFLARE_BLOCKS[info.block or ""] == true
 		local id, root = params.id, params.root
+		local view = VIEW_ACTIONS[action]
+		if view then
+			-- Open the other Qualflare view beside the pane that asked.
+			if from_qualflare and type(id) == "string" and string.match(id, "^[%w][%w%-_%.]*$") then
+				cx:new_block(view, { id :: string }, "beside", { target = link.pane })
+			end
+			return { handled = true }
+		end
+		local from_tab = info ~= nil and info.kind == "plugin" and info.block == "qualflare.launches"
 		if not from_tab or id == nil or root == nil or not project_has(root :: string, id :: string) then
 			return { handled = true }
 		end

@@ -1345,6 +1345,130 @@ test("views.overview_url is the project home", function()
 	eq(views.overview_url("demo-app"), "https://app.qualflare.com/project/demo-app")
 end)
 
+local function overview_for(days: number): string
+	return (string.gsub(OVERVIEW, '"days": 7', `"days": {days}`))
+end
+
+local function dash_projects()
+	plain_projects()
+	S.process["/bin/qf demo-app overview --days 7"] = { status = 0, stdout = overview_for(7), stderr = "", timed_out = false }
+	S.process["/bin/qf demo-app overview --days 28"] = { status = 0, stdout = overview_for(28), stderr = "", timed_out = false }
+end
+
+test("dashboard block loads the overview and switches window", function()
+	dash_projects()
+	local B = S.blocks.dashboard
+	local cx = S.block_cx(101, nil)
+	local s = B.init(cx, { "demo-app" }, nil)
+	eq(B.title(s), "Qualflare dashboard · demo-app")
+	eq(s.days, 7)
+	eq(s.data.window.days, 7)
+	B.event(s, { ev = "action", act = "days28" }, cx)
+	eq(s.days, 28)
+	eq(s.data.window.days, 28)
+	B.key(s, key("w"), cx)
+	eq(s.days, 7)
+	has(S.text(B.view(s, cx).main), "Success rate")
+end)
+
+test("dashboard block: an older window's late answer never wins", function()
+	dash_projects()
+	local B = S.blocks.dashboard
+	local cx = S.block_cx(102, nil)
+	local s = B.init(cx, { "demo-app" }, nil)
+	S.defer = true
+	B.event(s, { ev = "action", act = "refresh" }, cx) -- 7 days, in flight
+	B.event(s, { ev = "action", act = "days28" }, cx) -- 28 days, in flight
+	local q = S.deferred
+	S.deferred = {}
+	S.defer = false
+	q[2]() -- the 28-day answer lands first
+	q[1]() -- then the stale 7-day one
+	eq(s.days, 28)
+	eq(s.data.window.days, 28)
+end)
+
+test("dashboard block: an old qf and a logged-out project", function()
+	dash_projects()
+	S.process["/bin/qf old overview --days 7"] = { status = 0, stdout = "Usage:\n  qf old [command]\n", stderr = "", timed_out = false }
+	S.process["/bin/qf out overview --days 7"] = { status = 3, stdout = "", stderr = "Error: no token loaded", timed_out = false }
+	local B = S.blocks.dashboard
+	local old = B.init(S.block_cx(103, nil), { "old" }, nil)
+	eq(old.outdated, true)
+	has(S.text(B.view(old, S.block_cx(103, nil)).main), "Update qf")
+	local out = B.init(S.block_cx(104, nil), { "out" }, nil)
+	eq(out.status, 3)
+	eq(out.outdated, false)
+end)
+
+test("dashboard block: the refresh timer stops once the pane is gone", function()
+	dash_projects()
+	S.panes = { { pane = 105, title = "" } }
+	S.blocks.dashboard.init(S.block_cx(105, nil), { "demo-app" }, nil)
+	local t = S.timers[#S.timers]
+	S.panes = {}
+	local before = #S.runs
+	t.fn()
+	eq(#S.runs, before, "no qf after the pane closed")
+end)
+
+test("dashboard block: saved state comes back", function()
+	dash_projects()
+	local B = S.blocks.dashboard
+	local s = B.init(S.block_cx(106, nil), { "demo-app" }, nil)
+	B.event(s, { ev = "action", act = "days28" }, S.block_cx(106, nil))
+	local saved = B.save(s)
+	eq(saved.identifier, "demo-app")
+	eq(saved.days, 28)
+	local back = B.init(S.block_cx(107, nil), { "web" }, saved)
+	eq(back.identifier, "demo-app")
+	eq(back.days, 28)
+end)
+
+test("dashboard and launches panes link to each other and to the website", function()
+	dash_projects()
+	local B = S.blocks.dashboard
+	local cx = S.block_cx(108, nil)
+	local s = B.init(cx, { "demo-app" }, nil)
+	B.event(s, { ev = "action", act = "open" }, cx)
+	eq(S.opened[#S.opened], "https://app.qualflare.com/project/demo-app?src=tern")
+	B.event(s, { ev = "action", act = "launches" }, cx)
+	eq(S.opened[#S.opened], "qualflare-tern:launches?id=demo-app")
+	local L = S.blocks.launches
+	local lcx = S.block_cx(109, nil)
+	local ls = L.init(lcx, { "demo-app" }, nil)
+	L.event(ls, { ev = "action", act = "dashboard" }, lcx)
+	eq(S.opened[#S.opened], "qualflare-tern:dashboard?id=demo-app")
+	has(S.text(tab.view(ls).main), "Dashboard")
+end)
+
+test("window: Show dashboard and the bridge open the dashboard beside", function()
+	S.panes = { { pane = 3, cwd = "/w/repo/packages/web", title = "" } }
+	S.files["/w/repo/.qualflare/test-state.md"] = STATE
+	local cx = S.window_cx(3)
+	S.commands.overview.run(cx)
+	eq(cx.blocks[1][1], "qualflare.dashboard")
+	eq(cx.blocks[1][2][1], "acme-web")
+	eq(cx.blocks[1][3], "beside")
+
+	S.panes = {
+		{ pane = 3, kind = "plugin", cwd = "", title = "", block = "qualflare.launches" },
+		{ pane = 4, kind = "plugin", cwd = "", title = "", block = "qualflare.dashboard" },
+		{ pane = 5, kind = "terminal", cwd = "/w/repo", title = "" },
+	}
+	local wcx = S.window_cx(3)
+	eq(S.routes[1]({ url = "qualflare-tern:dashboard?id=demo-app", pane = 3, mods = {} }, wcx).handled, true)
+	eq(wcx.blocks[1][1], "qualflare.dashboard")
+	eq(wcx.blocks[1][2][1], "demo-app")
+	eq(S.routes[1]({ url = "qualflare-tern:launches?id=demo-app", pane = 4, mods = {} }, wcx).handled, true)
+	eq(wcx.blocks[2][1], "qualflare.launches")
+	-- from a terminal, or with a malformed id: swallowed, nothing opens
+	eq(S.routes[1]({ url = "qualflare-tern:dashboard?id=demo-app", pane = 5, mods = {} }, wcx).handled, true)
+	eq(S.routes[1]({ url = "qualflare-tern:dashboard?id=..%2Fx", pane = 3, mods = {} }, wcx).handled, true)
+	eq(#wcx.blocks, 2)
+	S.panes = {}
+end)
+
 print(`{passed} passed, {failed} failed, {pending} pending`)
 if failed > 0 then
 	error("tests failed")

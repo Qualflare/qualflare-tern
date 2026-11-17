@@ -7,6 +7,7 @@ local project = require("./lib/project")
 local qf = require("./lib/qf")
 local links = require("./lib/links")
 local tab = require("./lib/tab")
+local dashboard = require("./lib/dashboard")
 local views = require("./lib/views")
 
 local ui = tern.ui
@@ -762,6 +763,8 @@ tern.block.define("launches", {
 				load_more(s, cx)
 			elseif act == "upload" or act == "fix" then
 				hand_off(s, cx, act)
+			elseif act == "dashboard" and s.identifier then
+				cx:open(links.bridge("dashboard", { id = s.identifier :: string }))
 			elseif cluster_id(act) and s.identifier then
 				cx:open(views.own(views.cluster_url(s.identifier :: string, cluster_id(act))))
 			end
@@ -795,6 +798,8 @@ tern.block.define("launches", {
 			refresh(s, cx)
 		elseif n == "u" then
 			hand_off(s, cx, "upload")
+		elseif n == "d" and s.identifier then
+			cx:open(links.bridge("dashboard", { id = s.identifier :: string }))
 		elseif n == "p" then
 			s.menu_open = true
 			s.menu_active = s.identifier
@@ -811,5 +816,213 @@ tern.block.define("launches", {
 	end,
 	save = function(s: BlockState): any
 		return { identifier = s.identifier, launches = s.launches, selected = s.selected, refreshed = s.refreshed }
+	end,
+})
+
+---------------------------------------------------------------------------
+-- Block: qualflare.dashboard (the project Overview, from `qf <id> overview`)
+---------------------------------------------------------------------------
+
+type DashBlock = dashboard.DashState & {
+	cwd: string?,
+	timer: TimerHandle?,
+	-- bumped per qf overview request; older answers are dropped
+	req: number,
+}
+
+local function dash_refresh(s: DashBlock, cx: BlockCx)
+	local id = s.identifier
+	if id == nil then
+		return
+	end
+	s.loading = true
+	s.req += 1
+	local req, days = s.req, s.days
+	qf.read({ id :: string, "overview", "--days", tostring(days) }, s.cwd, function(r)
+		if s.identifier ~= id or s.req ~= req then
+			return -- another project, window or refresh went out since
+		end
+		s.loading = false
+		s.now = os.time()
+		if r.ok and type(r.data) == "table" and type(r.data.kpis) == "table" then
+			s.data = r.data
+			s.error, s.status, s.outdated = nil, nil, false
+			s.refreshed = s.now
+		elseif r.ok or r.status == 0 then
+			-- exit 0 without the overview's JSON: a qf from before `overview`,
+			-- which prints its help for an unknown command
+			s.outdated = true
+			s.data = nil
+		else
+			s.outdated = false
+			s.error = r.err
+			s.status = r.status
+		end
+		cx:render()
+	end)
+end
+
+local function dash_schedule(s: DashBlock, cx: BlockCx)
+	if s.timer then
+		(s.timer :: TimerHandle):cancel()
+	end
+	s.timer = tern.timer(REFRESH_MS, function()
+		if not running(cx.pane) then
+			return -- the pane closed
+		end
+		dash_refresh(s, cx)
+		dash_schedule(s, cx)
+	end)
+end
+
+local function dash_projects(s: DashBlock, cx: BlockCx)
+	qf.lines({ "projects" }, s.cwd, function(r)
+		if not r.ok then
+			return
+		end
+		local list: { string } = {}
+		for _, line in r.lines do
+			if is_identifier(line) then
+				table.insert(list, line)
+			end
+		end
+		if s.identifier and not table.find(list, s.identifier :: string) then
+			table.insert(list, 1, s.identifier :: string)
+		end
+		s.projects = list
+		if s.identifier == nil and #list > 0 then
+			s.identifier = list[1]
+			dash_refresh(s, cx)
+			dash_schedule(s, cx)
+		end
+		cx:render()
+	end)
+end
+
+local function dash_set_project(s: DashBlock, cx: BlockCx, id: string)
+	if id == s.identifier then
+		return
+	end
+	s.identifier = id
+	s.data, s.error, s.status, s.outdated, s.refreshed = nil, nil, nil, false, nil
+	dash_refresh(s, cx)
+	dash_schedule(s, cx)
+	cx:save()
+end
+
+local function dash_set_days(s: DashBlock, cx: BlockCx, days: number)
+	if days == s.days then
+		return
+	end
+	s.days = days
+	dash_refresh(s, cx)
+	cx:save()
+end
+
+tern.block.define("dashboard", {
+	font = "sans",
+	init = function(cx: BlockCx, args: { string }, saved: any): DashBlock
+		local s: DashBlock = {
+			projects = {},
+			days = 7,
+			outdated = false,
+			loading = false,
+			now = os.time(),
+			menu_open = false,
+			cwd = cx.cwd,
+			req = 0,
+		}
+		if type(saved) == "table" then
+			s.identifier = saved.identifier
+			s.days = if saved.days == 28 then 28 else 7
+			s.data = saved.data
+			s.refreshed = saved.refreshed
+		elseif args[1] and args[1] ~= "" then
+			s.identifier = args[1]
+		elseif cx.cwd then
+			local proj = project.find(cx.cwd :: string)
+			if proj then
+				s.identifier = proj.package.identifier
+			end
+		end
+		if s.identifier then
+			s.projects = { s.identifier :: string }
+			dash_refresh(s, cx)
+			dash_schedule(s, cx)
+		end
+		dash_projects(s, cx)
+		return s
+	end,
+	title = function(s: DashBlock): string?
+		return if s.identifier then `Qualflare dashboard · {s.identifier}` else "Qualflare dashboard"
+	end,
+	view = function(s: DashBlock, _cx: BlockCx): BlockView
+		s.now = os.time()
+		return dashboard.view(s)
+	end,
+	event = function(s: DashBlock, ev: UiEvent, cx: BlockCx)
+		local last = if type(ev.id) == "string" then string.match(ev.id, "([^%.]+)$") else nil
+		if last == "project" and ev.ev == "change" and type(ev.value) == "string" then
+			s.menu_open = false
+			dash_set_project(s, cx, ev.value)
+		elseif last == "project" and ev.ev == "toggle" then
+			s.menu_open = if type(ev.open) == "boolean" then ev.open else not s.menu_open
+		elseif ev.ev == "action" then
+			local act, id = ev.act, s.identifier
+			if act == "days7" then
+				dash_set_days(s, cx, 7)
+			elseif act == "days28" then
+				dash_set_days(s, cx, 28)
+			elseif act == "refresh" or act == "retry" then
+				dash_refresh(s, cx)
+			elseif act == "open" and id then
+				cx:open(views.own(views.overview_url(id :: string)))
+			elseif act == "launches" and id then
+				cx:open(links.bridge("launches", { id = id :: string }))
+			end
+		end
+	end,
+	key = function(s: DashBlock, key: Key, cx: BlockCx): boolean?
+		if key.ctrl or key.meta or key.alt then
+			return false
+		end
+		local n = key.name
+		if s.menu_open then
+			local at = table.find(s.projects, s.menu_active or s.identifier or "") or 0
+			if n == "up" or n == "k" then
+				s.menu_active = s.projects[math.max(at - 1, 1)]
+			elseif n == "down" or n == "j" then
+				s.menu_active = s.projects[math.min(at + 1, #s.projects)]
+			elseif n == "enter" then
+				s.menu_open = false
+				if s.menu_active then
+					dash_set_project(s, cx, s.menu_active :: string)
+				end
+			elseif n == "escape" then
+				s.menu_open = false
+			else
+				return false
+			end
+			return true
+		end
+		local id = s.identifier
+		if n == "w" then
+			dash_set_days(s, cx, if s.days == 7 then 28 else 7)
+		elseif n == "r" then
+			dash_refresh(s, cx)
+		elseif n == "p" then
+			s.menu_open = true
+			s.menu_active = s.identifier
+		elseif n == "l" and id then
+			cx:open(links.bridge("launches", { id = id :: string }))
+		elseif n == "enter" and id then
+			cx:open(views.own(views.overview_url(id :: string)))
+		else
+			return false
+		end
+		return true
+	end,
+	save = function(s: DashBlock): any
+		return { identifier = s.identifier, days = s.days, data = s.data, refreshed = s.refreshed }
 	end,
 })

@@ -26,7 +26,9 @@ Both halves are included: `host.luau` runs in Tern's session daemon, `window.lua
 
 *Open on website* shows the launch's test results in the dashboard. *Fix with omp* starts omp on a failed launch. *Upload* types `qf <id> collect …` into a terminal of the project. A menu at the top switches between the projects you're logged in to (`qf projects`). The pane refreshes every minute, and at once when `qf <id> collect` finishes in any terminal, selecting the new launch and marking it *new*.
 
-Keys: `↑`/`↓` select, `⏎` open on website, `r` refresh, `u` upload, `p` project.
+Keys: `↑`/`↓` select, `⏎` open on website, `r` refresh, `d` dashboard, `u` upload, `p` project.
+
+**Qualflare dashboard.** *Qualflare: Show dashboard* (or *Dashboard* in the Qualflare pane) opens the project's Overview beside the focused pane, as the website shows it: success rate, flake rate, launch p90, automation, defects opened and launches. Each card shows the latest number, green or red against the project's target, its change against the previous period, and a daily line. Switch between the last 7 and 28 days. It needs a `qf` with `qf <id> overview`; an older one gets an "Update qf" message. Keys: `w` window, `r` refresh, `l` launches, `p` project, `⏎` open on website.
 
 Clicking a dashboard launch link (`https://app.qualflare.com/project/<slug>/launches?…p.seq=<n>`) in a terminal opens the Qualflare pane on that launch, when you're logged in to that project. Turn this off with *Qualflare: Toggle opening Qualflare links in Tern*.
 
@@ -36,7 +38,8 @@ Clicking a dashboard launch link (`https://app.qualflare.com/project/<slug>/laun
 |---|---|
 | *Qualflare: Show launches* | Opens the Qualflare pane beside the focused pane, for its project |
 | *Qualflare: Upload test results* | Types `qf <id> collect <report folder>` into the focused pane |
-| *Qualflare: Open dashboard* | Opens the project in the browser |
+| *Qualflare: Show dashboard* | Opens the Qualflare dashboard beside the focused pane, for its project |
+| *Qualflare: Open website* | Opens the project in the browser |
 | *Qualflare: Fix failing tests with omp* | Starts an omp agent on `/skill:qf-fix` (needs the Qualflare plugin in omp) |
 | *Qualflare: Toggle upload prompt after tests* | Turns the upload prompt on or off |
 | *Qualflare: Toggle opening Qualflare links in Tern* | Dashboard launch links open in the Qualflare pane, or in the browser |
