@@ -102,7 +102,7 @@ local function head(s: TabState): Node
 	return ui.node("row", { key = "head", justify = "between", align = "center" }, {
 		ui.node("row", { key = "start", gap = "sm", align = "center" }, left),
 		ui.node("row", { key = "end", gap = "sm", align = "center" }, {
-			ui.button("Dashboard", { key = "dashboard", icon = "list-checks", keys = { "d" }, disabled = s.identifier == nil, actions = { click = "dashboard" } }),
+			ui.button("Dashboard", { key = "dashboard", icon = "gauge", keys = { "d" }, disabled = s.identifier == nil, actions = { click = "dashboard" } }),
 			ui.button("Upload", { key = "upload", icon = "push", keys = { "u" }, disabled = hand_off_reason(s), actions = { click = "upload" } }),
 			ui.button("Refresh", { key = "refresh", icon = "repeat", keys = { "r" }, busy = s.loading, disabled = s.identifier == nil, actions = { click = "refresh" } }),
 		}),

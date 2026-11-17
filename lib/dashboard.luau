@@ -40,6 +40,9 @@ local HIGHER_IS_BETTER: { [string]: boolean } = {
 
 -- After this long without a new metrics bucket, say the numbers are stale.
 local STALE_S = 30 * 60
+-- After this long without a successful refresh of its own (it tries every
+-- minute), the pane says when it last managed one.
+local REFRESH_LATE_S = 3 * 60
 
 local function number(v: any): number?
 	return if type(v) == "number" then v else nil
@@ -220,14 +223,27 @@ function M.view(s: DashState): BlockView
 	else
 		local kpis: { any } = if type(data.kpis) == "table" then data.kpis else {}
 		if type(data.dataThrough) == "string" then
+			-- Judged at the pane's last refresh, not now: a laptop that slept
+			-- doesn't make the server's metrics stale.
 			local through = views.epoch(data.dataThrough)
-			if through and s.now - (through :: number) > STALE_S then
-				table.insert(parts, ui.text({ ui.span(`Metrics haven't updated since {views.ago(data.dataThrough, s.now)}.`, "warning") }))
+			local at = s.refreshed or s.now
+			if through and at - (through :: number) > STALE_S then
+				table.insert(parts, ui.text({ ui.span(`Metrics last updated {views.ago(data.dataThrough, s.now)}.`, "warning") }))
 			end
 		else
 			-- The numbers came, but not how fresh they are (the server couldn't
 			-- read the rollup's watermark, or it has never run).
 			table.insert(parts, ui.text({ ui.span("Metrics data age unknown.", "muted") }))
+		end
+		if s.refreshed and s.now - (s.refreshed :: number) > REFRESH_LATE_S then
+			table.insert(parts, ui.text({ ui.span(`Last refreshed {views.ago(s.refreshed, s.now)}.`, "muted") }))
+		end
+		if type(data.warnings) == "table" then
+			for _, w in data.warnings do
+				if type(w) == "string" and w ~= "" then
+					table.insert(parts, ui.text({ ui.span(w, "warning") }))
+				end
+			end
 		end
 		if s.error then
 			table.insert(parts, ui.text({ ui.span(s.error :: string, "error") }))

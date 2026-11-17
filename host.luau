@@ -863,11 +863,17 @@ local function dash_refresh(s: DashBlock, cx: BlockCx)
 			s.data = s.cache[s.days]
 			s.error, s.status, s.outdated = nil, nil, false
 			s.refreshed = s.now
-		elseif r.ok or r.status == 0 or qf_lacks_overview(r.err) then
-			-- A qf from before `overview`: with no flags it prints its help and
-			-- exits 0; with --days it fails on the unknown flag.
+		elseif qf_lacks_overview(r.err) or (r.status == 0 and string.find(r.out or "", "Usage:", 1, true) ~= nil) then
+			-- A qf from before `overview`: with --days it fails on the unknown
+			-- flag; asked without flags it prints its help and exits 0.
 			s.outdated = true
 			s.data = nil
+		elseif r.status == 0 then
+			-- Something else answered: a proxy or login page, or a broken qf.
+			local first = string.match(r.out or "", "^%s*([^\n]+)") or ""
+			s.outdated = false
+			s.error = if first ~= "" then `qf printed something that isn't the overview: {string.sub(first, 1, 120)}` else "qf printed something that isn't the overview"
+			s.status = 1
 		else
 			s.outdated = false
 			s.error = r.err

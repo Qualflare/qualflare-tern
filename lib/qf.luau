@@ -67,7 +67,9 @@ function M.explain(status: number): (string, string)
 	return "Failed", "bad"
 end
 
-export type Result = { ok: boolean, data: any?, status: number, err: string? }
+-- `out` is the start of stdout when it wasn't JSON, so a caller can tell a
+-- help page from, say, a proxy's login page.
+export type Result = { ok: boolean, data: any?, status: number, err: string?, out: string? }
 
 -- Runs `qf <args>`; spawn failures (almost always `qf` missing) come back as
 -- status 127 with an install hint.
@@ -103,7 +105,7 @@ function M.read(args: { string }, cwd: string?, cb: (Result) -> ())
 		end
 		local dok, data = pcall(tern.json.decode, res.stdout)
 		if not dok then
-			cb({ ok = false, status = 0, err = "qf printed something that isn't JSON" })
+			cb({ ok = false, status = 0, err = "qf printed something that isn't JSON", out = string.sub(res.stdout, 1, 2000) })
 			return
 		end
 		cb({ ok = true, status = 0, data = data })

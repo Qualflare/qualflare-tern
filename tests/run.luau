@@ -1301,7 +1301,7 @@ test("dashboard view: six cards with lines, data age and the window buttons", fu
 	eq(b7.p.props.variant, "primary")
 	assert(b28.p.props.variant ~= "primary", "28 days isn't the active window")
 	has(S.text(v.dock), "W window")
-	no(t, "haven't updated")
+	no(t, "Metrics last updated")
 end)
 
 test("dashboard view: a fresh project's nulls show dashes and gaps", function()
@@ -1335,7 +1335,7 @@ test("dashboard view: states", function()
 	local old = S.text(dashboard.view(dst({ outdated = true })).main)
 	has(old, "Update qf to use the dashboard")
 	has(old, "brew install qualflare/tap/qf")
-	has(S.text(dashboard.view(dst({ data = tern.json.decode(OVERVIEW), now = OV_NOW + 45 * 60 })).main), "haven't updated")
+	has(S.text(dashboard.view(dst({ data = tern.json.decode(OVERVIEW), now = OV_NOW + 45 * 60 })).main), "Metrics last updated 45 min ago")
 end)
 
 test("views.overview_url is the project home", function()
@@ -1534,6 +1534,72 @@ test("dashboard block: an old qf rejecting --days reads as outdated", function()
 		eq(s.outdated, true, id)
 		has(S.text(B.view(s, S.block_cx(120, nil)).main), "Update qf to use the dashboard")
 	end
+end)
+
+---------------------------------------------------------------------------
+-- Dashboard polish
+---------------------------------------------------------------------------
+
+test("polish: the server's data warnings are shown", function()
+	local data = tern.json.decode(OVERVIEW) :: any
+	data.warnings = { "The window starts before the 90-day retention; older days are empty." }
+	has(S.text(dashboard.view(dst({ data = data })).main), "90-day retention")
+end)
+
+test("polish: staleness is judged at the last refresh, and an old refresh says so", function()
+	-- refreshed 45 min after the newest bucket: the server is stale
+	local stale = dashboard.view(dst({ data = tern.json.decode(OVERVIEW), refreshed = OV_NOW + 45 * 60, now = OV_NOW + 46 * 60 }))
+	has(S.text(stale.main), "Metrics last updated 46 min ago")
+	-- refreshed 5 min after the bucket, then the laptop slept for 14 h: not the server's fault
+	local slept = dashboard.view(dst({ data = tern.json.decode(OVERVIEW), refreshed = OV_NOW + 5 * 60, now = OV_NOW + 14 * 3600 }))
+	no(S.text(slept.main), "Metrics last updated")
+	has(S.text(slept.main), "Last refreshed 13 h ago")
+end)
+
+test("polish: only real help output reads as an old qf; other non-JSON is an error", function()
+	dash_projects()
+	S.process["/bin/qf proxy overview --days 7"] = { status = 0, stdout = "<html><title>Wi-Fi login</title></html>\n", stderr = "", timed_out = false }
+	local B = S.blocks.dashboard
+	local s = B.init(S.block_cx(130, nil), { "proxy" }, nil)
+	eq(s.outdated, false)
+	has(s.error or "", "<html><title>Wi-Fi login")
+	S.process["/bin/qf old4 overview --days 7"] = { status = 0, stdout = "Usage:\n  qf old4 [command]\n", stderr = "", timed_out = false }
+	eq(B.init(S.block_cx(131, nil), { "old4" }, nil).outdated, true)
+end)
+
+test("polish: opening a view a project already has focuses that pane", function()
+	S.files["/w/repo/.qualflare/test-state.md"] = STATE
+	S.panes = {
+		{ pane = 3, kind = "plugin", cwd = "", title = "Qualflare · demo-app", block = "qualflare.launches" },
+		{ pane = 4, kind = "plugin", cwd = "", title = "Qualflare dashboard · demo-app", block = "qualflare.dashboard" },
+		{ pane = 6, kind = "terminal", cwd = "/w/repo/packages/web", title = "" },
+		{ pane = 7, kind = "plugin", cwd = "", title = "Qualflare dashboard · acme-web", block = "qualflare.dashboard" },
+	}
+	local cx = S.window_cx(3)
+	eq(S.routes[1]({ url = "qualflare-tern:dashboard?id=demo-app", pane = 3, mods = {} }, cx).handled, true)
+	eq(#cx.blocks, 0, "no second dashboard")
+	eq(S.focused_panes[#S.focused_panes], 4)
+	S.routes[1]({ url = "qualflare-tern:launches?id=demo-app", pane = 4, mods = {} }, cx)
+	eq(#cx.blocks, 0)
+	eq(S.focused_panes[#S.focused_panes], 3)
+	-- the palette command too, for the focused terminal's project
+	local wcx = S.window_cx(6)
+	S.commands.overview.run(wcx)
+	eq(#wcx.blocks, 0)
+	eq(S.focused_panes[#S.focused_panes], 7)
+	-- a project with no open view still gets a new pane
+	S.routes[1]({ url = "qualflare-tern:dashboard?id=web", pane = 3, mods = {} }, cx)
+	eq(cx.blocks[1][1], "qualflare.dashboard")
+	S.panes = {}
+end)
+
+test("polish: the Dashboard button has its own icon", function()
+	local launches = (tern.json.decode(LAUNCHES) :: any).items
+	local v = tab.view(st({ launches = launches }))
+	local b = find(v.main, function(n)
+		return n.k == "button" and n.p.props and n.p.props.key == "dashboard"
+	end)
+	eq(b.p.props.icon, "gauge")
 end)
 
 print(`{passed} passed, {failed} failed, {pending} pending`)

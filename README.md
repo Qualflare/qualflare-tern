@@ -16,7 +16,7 @@ Both halves are included: `host.luau` runs in Tern's session daemon, `window.lua
 
 **Native `qf` output.**
 - `qf <id> collect …` shows a result card: uploaded, not logged in, plan limit, retry. It also shows skipped attachments and an *Open launches* button.
-- `qf <id> launches list`, `clusters list` and `defects list` show a table instead of JSON. Double-click a row, or press its open button, to see it in the dashboard. The *Raw* toggle shows the JSON.
+- `qf <id> launches list`, `clusters list` and `defects list` show a table instead of JSON. Double-click a row, or press its open button, to see it on the website. The *Raw* toggle shows the JSON.
 
 **Qualflare pane.** *Qualflare: Show launches* opens a Qualflare pane beside the focused one, for that pane's project:
 - one line on the latest run (`✗ 8 of 120 failing · main · Staging · 12 min ago`), what changed since the last run on the same branch and environment (`+2 tests · 8 more failing than #41`), or a reminder when the last run is over a week old;
@@ -24,13 +24,13 @@ Both halves are included: `host.luau` runs in Tern's session daemon, `window.lua
 - the recent launches and, for the selected one, Qualflare's AI summary (risk, failing areas, recommendations);
 - when the latest run failed, *Where to look*: up to three failure clusters seen since that run started.
 
-*Open on website* shows the launch's test results in the dashboard. *Fix with omp* starts omp on a failed launch. *Upload* types `qf <id> collect …` into a terminal of the project. A menu at the top switches between the projects you're logged in to (`qf projects`). The pane refreshes every minute, and at once when `qf <id> collect` finishes in any terminal, selecting the new launch and marking it *new*.
+*Open on website* shows the launch's test results on the website. *Fix with omp* starts omp on a failed launch. *Upload* types `qf <id> collect …` into a terminal of the project. A menu at the top switches between the projects you're logged in to (`qf projects`). The pane refreshes every minute, and at once when `qf <id> collect` finishes in any terminal, selecting the new launch and marking it *new*.
 
 Keys: `↑`/`↓` select, `⏎` open on website, `r` refresh, `d` dashboard, `u` upload, `p` project.
 
-**Qualflare dashboard.** *Qualflare: Show dashboard* (or *Dashboard* in the Qualflare pane) opens the project's Overview beside the focused pane, as the website shows it: success rate, flake rate, launch p90, automation, defects opened and launches. Each card shows the latest number, green or red against the project's target, its change against the previous period, and a daily line. Switch between the last 7 and 28 days. It needs a `qf` with `qf <id> overview`; an older one gets an "Update qf" message. Keys: `w` window, `r` refresh, `l` launches, `p` project, `⏎` open on website.
+**Qualflare dashboard.** *Qualflare: Show dashboard* (or *Dashboard* in the Qualflare pane) opens the project's Overview beside the focused pane, as the website shows it: success rate, flake rate, launch p90, automation, defects opened and launches. Each card shows the latest number, green or red against the project's target, its change against the previous period, and a daily line. Switch between the last 7 and 28 days. Opening a view a project already has open focuses that pane. It needs a `qf` with `qf <id> overview`; an older one gets an "Update qf" message. Keys: `w` window, `r` refresh, `l` launches, `p` project, `⏎` open on website.
 
-Clicking a dashboard launch link (`https://app.qualflare.com/project/<slug>/launches?…p.seq=<n>`) in a terminal opens the Qualflare pane on that launch, when you're logged in to that project. Turn this off with *Qualflare: Toggle opening Qualflare links in Tern*.
+Clicking a website launch link (`https://app.qualflare.com/project/<slug>/launches?…p.seq=<n>`) in a terminal opens the Qualflare pane on that launch, when you're logged in to that project. Turn this off with *Qualflare: Toggle opening Qualflare links in Tern*.
 
 **Palette commands.**
 
@@ -58,7 +58,7 @@ Settings live in the plugin's `kv.json` (`<state>/plugin-data/qualflare/`):
 | `qf_path` | found on `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/go/bin` | The `qf` executable |
 | `report_dirs` | `[]` | More report folders to watch, relative to the package |
 | `slugs` | `{}` | Dashboard slug per `qf` identifier, when they differ (`{"web": "acme-web"}`) |
-| `route_links` | `true` | Open dashboard launch links clicked in terminals in the Qualflare pane |
+| `route_links` | `true` | Open website launch links clicked in terminals in the Qualflare pane |
 
 ## Development
 

@@ -25,14 +25,35 @@ local function no_project(cx: WindowCx)
 	cx:toast("info", "No Qualflare project here", "Run /qf-init in Claude Code or omp to set one up.")
 end
 
+-- The pane title each Qualflare view gives itself for a project (the blocks'
+-- `title` in host.luau).
+local VIEW_TITLES: { [string]: string } = {
+	["qualflare.launches"] = "Qualflare · ",
+	["qualflare.dashboard"] = "Qualflare dashboard · ",
+}
+
+-- Opens a Qualflare view of a project, or focuses the pane that already
+-- shows it, so moving between the views doesn't stack panes.
+local function open_view(cx: WindowCx, kind: string, id: string?, opts: BlockOpts?)
+	if id ~= nil then
+		local want = VIEW_TITLES[kind] .. (id :: string)
+		for _, info in cx.session:panes() do
+			if info.kind == "plugin" and info.block == kind and info.title == want then
+				cx.layout:focus(info.pane)
+				return
+			end
+		end
+	end
+	cx:new_block(kind, if id then { id :: string } else nil, "beside", opts)
+end
+
 tern.command({
 	id = "launches",
 	title = "Qualflare: Show launches",
 	icon = "list-checks",
 	run = function(cx: WindowCx)
 		local proj = focused_project(cx)
-		local args = if proj then { proj.package.identifier } else nil
-		cx:new_block("qualflare.launches", args, "beside")
+		open_view(cx, "qualflare.launches", if proj then proj.package.identifier else nil)
 	end,
 })
 
@@ -40,11 +61,10 @@ tern.command({
 	-- "dashboard" is the older command that opens the website.
 	id = "overview",
 	title = "Qualflare: Show dashboard",
-	icon = "list-checks",
+	icon = "gauge",
 	run = function(cx: WindowCx)
 		local proj = focused_project(cx)
-		local args = if proj then { proj.package.identifier } else nil
-		cx:new_block("qualflare.dashboard", args, "beside")
+		open_view(cx, "qualflare.dashboard", if proj then proj.package.identifier else nil)
 	end,
 })
 
@@ -257,7 +277,7 @@ tern.route.link(function(link: LinkRequest, cx: WindowCx): RouteDecision?
 		if view then
 			-- Open the other Qualflare view beside the pane that asked.
 			if from_qualflare and type(id) == "string" and string.match(id, "^[%w][%w%-_%.]*$") then
-				cx:new_block(view, { id :: string }, "beside", { target = link.pane })
+				open_view(cx, view, id :: string, { target = link.pane })
 			end
 			return { handled = true }
 		end
