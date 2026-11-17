@@ -856,6 +856,13 @@ test("review2: switching project drops the old project's clusters and mark", fun
 	S.process[CLUSTERS_CMD] = nil
 end)
 
+test("polish: a newest run marked failed without counts still fetches clusters", function()
+	plain_projects()
+	S.process["/bin/qf bare launches list"] = { status = 0, stdout = '{"items":[{"seq":3,"status":"failed","totalCount":0}],"paging":{}}', stderr = "", timed_out = false }
+	S.blocks.launches.init(S.block_cx(91, nil), { "bare" }, nil)
+	eq(ran("/bin/qf bare clusters list --sort-by lastSeenAt --sort-desc"), 1)
+end)
+
 test("Ctrl-C and signals don't get the upload prompt", function()
 	eq(detect.finished_normally(0), true)
 	eq(detect.finished_normally(1), true)
@@ -1050,6 +1057,40 @@ test("views: launches table hides Branch and Environment when no run has one", f
 	has(heads(full), "Branch")
 	no(heads(full), "Environment")
 	eq(#full.p.rows[1].cells, #full.p.cols)
+end)
+
+test("polish: a run marked failed counts as failing even without failure counts", function()
+	eq(views.failing({ failedCount = 1 }), true)
+	eq(views.failing({ status = "failed" }), true)
+	eq(views.failing({ status = "error" }), true)
+	eq(views.failing({ status = "timeout" }), true)
+	eq(views.failing({ status = "passed" }), false)
+	eq(views.failing({ status = "running" }), false)
+	local bare = { seq = 3, status = "failed", totalCount = 10, passedCount = 10, environmentName = "Staging" }
+	local v = tab.verdict(bare, 0)
+	eq(v.tone, "error")
+	has(v.text, "✗ Latest run failed · Staging")
+	local view = tab.view(st({ launches = { bare, { seq = 2, status = "passed", totalCount = 1, passedCount = 1 } }, clusters = { { id = 1, label = "boom" } } }))
+	local chart = find(view.main, function(n)
+		return n.k == "chart"
+	end)
+	eq(chart.p.series[2].tone, "error", "its bar is red")
+	has(S.text(view.main), "Fix with omp")
+	has(S.text(view.main), "Where to look")
+end)
+
+test("polish: failures with no total don't read as 'of 0'", function()
+	local v = tab.verdict({ failedCount = 3 }, 0)
+	has(v.text, "✗ 3 failing")
+	no(v.text, "of 0")
+end)
+
+test("polish: trend bars are tall enough to tell 92% from 100%", function()
+	local launches = (tern.json.decode(LAUNCHES) :: any).items
+	local chart = find(tab.view(st({ launches = launches })).main, function(n)
+		return n.k == "chart"
+	end)
+	eq(chart.p.size, "md")
 end)
 
 test("tab: verdict reads failing, passed and other states", function()

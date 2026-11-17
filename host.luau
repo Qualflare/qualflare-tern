@@ -435,7 +435,7 @@ end
 local function load_clusters(s: BlockState, cx: BlockCx)
 	local id = s.identifier
 	local launches = s.launches
-	if id == nil or launches == nil or #launches == 0 or views.failed(launches[1]) == 0 then
+	if id == nil or launches == nil or #launches == 0 or not views.failing(launches[1]) then
 		s.clusters = nil
 		return
 	end

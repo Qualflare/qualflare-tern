@@ -119,7 +119,13 @@ function M.verdict(l: any, now: number): { tone: string, text: string }
 	local tone
 	if failed > 0 then
 		tone = "error"
-		table.insert(parts, `✗ {failed} of {total} failing`)
+		table.insert(parts, if total >= failed then `✗ {failed} of {total} failing` else `✗ {failed} failing`)
+		table.insert(parts, str(l.branch))
+	elseif views.failing(l) then
+		-- marked failed, but no failing tests counted
+		tone = "error"
+		local said = ({ error = "errored", timeout = "timed out" } :: { [string]: string })[str(l.status)] or "failed"
+		table.insert(parts, `✗ Latest run {said}`)
 		table.insert(parts, str(l.branch))
 	elseif str(l.status) == "passed" then
 		tone = "success"
@@ -188,13 +194,14 @@ local function overview(s: TabState, launches: { any }): Node
 				value = pass_rate(l),
 				label = `#{str(l.seq)}`,
 				title = `#{str(l.seq)} · {str(l.status)} · {num(l.passedCount)} passed, {failed} failed`,
-				tone = if failed > 0 then "error" else "success",
+				tone = if views.failing(l) then "error" else "success",
 			})
 		end
 		table.insert(parts, ui.node("chart", {
 			key = "trend",
 			kind = "bars",
-			size = "sm",
+			-- 4 lines: tall enough that 92% and 100% look different
+			size = "md",
 			min = 0,
 			max = 100,
 			series = series,
@@ -255,7 +262,7 @@ local function card(l: any, s: TabState): Node
 	local buttons: { Node } = {
 		ui.button("Open on website", { key = "open", variant = "primary", icon = "open", keys = { "enter" }, actions = { click = "open" } }),
 	}
-	if failed > 0 then
+	if views.failing(l) then
 		table.insert(buttons, ui.button("Fix with omp", { key = "fix", icon = "app-omp", disabled = hand_off_reason(s), actions = { click = "fix" } }))
 	end
 	table.insert(body, ui.node("row", { gap = "sm", wrap = true }, buttons))
@@ -281,7 +288,7 @@ end
 -- The newest failure clusters, when the newest run failed.
 local function where_to_look(s: TabState, launches: { any }): Node?
 	local clusters = s.clusters
-	if clusters == nil or #clusters == 0 or views.failed(launches[1]) == 0 then
+	if clusters == nil or #clusters == 0 or not views.failing(launches[1]) then
 		return nil
 	end
 	-- Clusters last seen before the newest run aren't about it.

@@ -169,6 +169,14 @@ function M.failed(l: any): number
 	return num(l.failedCount) + num(l.errorCount) + num(l.timeoutCount)
 end
 
+local FAILING_STATUS: { [string]: boolean } = { failed = true, error = true, timeout = true }
+
+-- Whether a launch failed: by its counts, or by its status when the counts
+-- say nothing (a run that broke before reporting tests).
+function M.failing(l: any): boolean
+	return M.failed(l) > 0 or FAILING_STATUS[str(l.status)] == true
+end
+
 export type Summary = { text: string, risk: string?, why: string?, areas: { string }, recommendations: { string } }
 
 -- One line for an item of `failingAreas` or `recommendations`: a string, or
