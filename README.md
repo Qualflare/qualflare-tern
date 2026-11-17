@@ -19,10 +19,10 @@ Both halves are included: `host.luau` runs in Tern's session daemon, `window.lua
 - `qf <id> launches list`, `clusters list` and `defects list` show a table instead of JSON. Double-click a row, or press its open button, to see it in the dashboard. The *Raw* toggle shows the JSON.
 
 **Qualflare pane.** *Qualflare: Show launches* opens a Qualflare pane beside the focused one, for that pane's project:
-- one line on the latest run (`✗ 8 of 120 failing · main · Staging · 12 min ago`), what changed since the run before (`+2 tests · 8 more failing than #41`), or a reminder when the last run is over a week old;
+- one line on the latest run (`✗ 8 of 120 failing · main · Staging · 12 min ago`), what changed since the last run on the same branch and environment (`+2 tests · 8 more failing than #41`), or a reminder when the last run is over a week old;
 - the pass rate of the last 20 runs as bars, red where a run failed;
 - the recent launches and, for the selected one, Qualflare's AI summary (risk, failing areas, recommendations);
-- when the latest run failed, *Where to look*: the three most recently seen failure clusters.
+- when the latest run failed, *Where to look*: up to three failure clusters seen since that run started.
 
 *Open on website* shows the launch's test results in the dashboard. *Fix with omp* starts omp on a failed launch. *Upload* types `qf <id> collect …` into a terminal of the project. A menu at the top switches between the projects you're logged in to (`qf projects`). The pane refreshes every minute, and at once when `qf <id> collect` finishes in any terminal, selecting the new launch and marking it *new*.
 

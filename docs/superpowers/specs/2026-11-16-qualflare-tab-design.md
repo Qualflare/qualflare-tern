@@ -153,8 +153,9 @@ Where to look
    anything else `● Latest run <status> · …`. Missing fields are left out.
    When the newest run is older than 7 days, a second line says `No runs in
    <n> days.` and how to upload.
-2. **What changed:** a muted line comparing the newest launch with the one
-   before it: test-count delta and failing delta (`+2 tests · 4 more failing
+2. **What changed:** a muted line comparing the newest launch with the last
+   earlier one on the same branch and environment (none: no line):
+   test-count delta and failing delta (`+2 tests · 4 more failing
    than #41`, or `Same counts as #41`).
 3. **Trend:** a `chart` of kind `bars` for up to the 20 newest launches,
    oldest on the left, height = pass rate (0–100), red for runs with failures,
@@ -162,11 +163,15 @@ Where to look
 4. **Where to look:** when the newest launch has failures, the three most
    recently seen failure clusters (`qf <id> clusters list --sort-by lastSeenAt
    --sort-desc`) in the existing clusters table; a row opens the cluster on the
-   website. A failed clusters call just hides the section.
+   website. Only clusters last seen at or after the newest launch's start
+   count, with "Last seen" as an age. A failed clusters call just hides the
+   section.
 5. **Live updates:** when `qf <id> collect` finishes successfully in any
    terminal, every open Qualflare pane on that project refreshes at once,
-   selects the new launch and marks it `new` until the next refresh. If the new
-   launch isn't listed yet, it retries once 5 s later.
+   selects the new launch and marks it `new` until the next refresh. The
+   pending upload is pane state, so whichever refresh answers first finishes
+   it; a launch created while `collect` ran counts too. If the new launch
+   isn't listed yet, it retries once 5 s later.
 6. **Polish and narrow panes:** ages instead of dates (`19 d ago` up to 30
    days, then `Oct 28`, or `Oct 28, 2025` in another year); the card's status is
    a small badge at its head end; no "no branch"; the risk badge on its own line
