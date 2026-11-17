@@ -833,6 +833,15 @@ type DashBlock = dashboard.DashState & {
 	cache: { [number]: any },
 }
 
+-- Whether a failed `qf … overview --days N` came from a qf without the command.
+local function qf_lacks_overview(err: string?): boolean
+	if err == nil then
+		return false
+	end
+	return string.find(err, "unknown flag: --days", 1, true) ~= nil
+		or string.find(err, 'unknown command "overview"', 1, true) ~= nil
+end
+
 local function dash_refresh(s: DashBlock, cx: BlockCx)
 	local id = s.identifier
 	if id == nil then
@@ -854,9 +863,9 @@ local function dash_refresh(s: DashBlock, cx: BlockCx)
 			s.data = s.cache[s.days]
 			s.error, s.status, s.outdated = nil, nil, false
 			s.refreshed = s.now
-		elseif r.ok or r.status == 0 then
-			-- exit 0 without the overview's JSON: a qf from before `overview`,
-			-- which prints its help for an unknown command
+		elseif r.ok or r.status == 0 or qf_lacks_overview(r.err) then
+			-- A qf from before `overview`: with no flags it prints its help and
+			-- exits 0; with --days it fails on the unknown flag.
 			s.outdated = true
 			s.data = nil
 		else

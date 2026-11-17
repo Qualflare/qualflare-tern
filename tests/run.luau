@@ -1524,6 +1524,18 @@ test("review: target-coloured headlines keep the title style; open on website; c
 	has(S.text(v.main), "daily average of the 7 days before")
 end)
 
+test("dashboard block: an old qf rejecting --days reads as outdated", function()
+	dash_projects()
+	S.process["/bin/qf old2 overview --days 7"] = { status = 1, stdout = "", stderr = "Error: unknown flag: --days\nUsage:\n  qf old2 [command]", timed_out = false }
+	S.process["/bin/qf old3 overview --days 7"] = { status = 1, stdout = "", stderr = 'Error: unknown command "overview" for "qf old3"', timed_out = false }
+	local B = S.blocks.dashboard
+	for _, id in { "old2", "old3" } do
+		local s = B.init(S.block_cx(120, nil), { id }, nil)
+		eq(s.outdated, true, id)
+		has(S.text(B.view(s, S.block_cx(120, nil)).main), "Update qf to use the dashboard")
+	end
+end)
+
 print(`{passed} passed, {failed} failed, {pending} pending`)
 if failed > 0 then
 	error("tests failed")
