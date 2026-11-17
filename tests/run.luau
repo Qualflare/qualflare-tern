@@ -696,9 +696,22 @@ test("views.ago buckets relative times", function()
 	eq(views.ago("2026-11-16T12:00:00Z", t + 300), "5 min ago")
 	eq(views.ago("2026-11-16T12:00:00Z", t + 3 * 3600), "3 h ago")
 	eq(views.ago("2026-11-16T12:00:00Z", t + 2 * 86400), "2 d ago")
-	eq(views.ago("2026-11-16T12:00:00Z", t + 8 * 86400), "2026-11-16 12:00")
+	eq(views.ago("2026-11-16T12:00:00Z", t + 8 * 86400), "8 d ago")
+	eq(views.ago("2026-11-16T12:00:00Z", t + 40 * 86400), "Nov 16")
+	eq(views.ago("2026-11-16T12:00:00Z", t + 400 * 86400), "Nov 16, 2026")
+	eq(views.ago(t, t + 400 * 86400), "400 d ago")
+	eq(views.days("2026-11-16T12:00:00Z", t + 8 * 86400 + 5), 8)
+	eq(views.days(nil, t), nil)
 	eq(views.ago(nil, t), "")
 	eq(views.epoch("2000-03-01T00:00:00Z"), 951868800) -- leap-year arithmetic
+end)
+
+test("views.change compares a launch with the one before", function()
+	local prev = { seq = 41, totalCount = 118, failedCount = 0 }
+	eq(views.change({ seq = 42, totalCount = 120, failedCount = 7, errorCount = 1 }, prev), "+2 tests · 8 more failing than #41")
+	eq(views.change({ seq = 42, totalCount = 115, failedCount = 0 }, { seq = 41, totalCount = 118, failedCount = 3 }), "−3 tests · 3 fewer failing than #41")
+	eq(views.change({ seq = 42, totalCount = 118 }, prev), "Same counts as #41")
+	eq(views.change({ seq = 42, totalCount = 118, failedCount = 1 }, prev), "1 more failing than #41")
 end)
 
 test("views.failed adds failures, errors and timeouts", function()

@@ -100,8 +100,20 @@ function M.epoch(ts: any): number?
 	return days * 86400 + (tonumber(h) :: number) * 3600 + (tonumber(mi) :: number) * 60 + (tonumber(se) :: number)
 end
 
--- "just now", "5 min ago", "3 h ago", "2 d ago", then the date from a week on.
--- `ts` is an ISO timestamp or Unix seconds.
+local MONTHS = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
+
+-- Whole days since `ts` (an ISO timestamp or Unix seconds), or nil.
+function M.days(ts: any, now: number): number?
+	local t = if type(ts) == "number" then ts else M.epoch(ts)
+	if t == nil then
+		return nil
+	end
+	return math.max(0, now - t) // 86400
+end
+
+-- "just now", "5 min ago", "3 h ago", "12 d ago", then the date ("Oct 28",
+-- or "Oct 28, 2025" in another year) from 30 days on.
+-- `ts` is an ISO timestamp or Unix seconds; seconds always stay relative.
 function M.ago(ts: any, now: number): string
 	local t = if type(ts) == "number" then ts else M.epoch(ts)
 	if t == nil then
@@ -114,10 +126,42 @@ function M.ago(ts: any, now: number): string
 		return `{secs // 60} min ago`
 	elseif secs < 86400 then
 		return `{secs // 3600} h ago`
-	elseif secs < 7 * 86400 or type(ts) == "number" then
+	elseif secs < 30 * 86400 or type(ts) == "number" then
 		return `{secs // 86400} d ago`
 	end
-	return M.when(ts)
+	local y, mo, d = string.match(str(ts), "^(%d%d%d%d)%-(%d%d)%-(%d%d)")
+	local year, month, day = tonumber(y) :: number, tonumber(mo) :: number, tonumber(d) :: number
+	local label = `{MONTHS[month] or mo} {day}`
+	local next_year = days_from_civil(year + 1, 1, 1) * 86400
+	if now >= next_year then
+		return `{label}, {year}`
+	end
+	return label
+end
+
+-- How a launch differs from the one before it, e.g.
+-- "+2 tests · 8 more failing than #41", or "Same counts as #41".
+function M.change(cur: any, prev: any): string
+	local parts: { string } = {}
+	local tests = num(cur.totalCount) - num(prev.totalCount)
+	if tests > 0 then
+		table.insert(parts, `+{tests} tests`)
+	elseif tests < 0 then
+		table.insert(parts, `−{-tests} tests`)
+	end
+	local failing = M.failed(cur) - M.failed(prev)
+	local ref = `#{str(prev.seq)}`
+	if failing > 0 then
+		table.insert(parts, `{failing} more failing than {ref}`)
+	elseif failing < 0 then
+		table.insert(parts, `{-failing} fewer failing than {ref}`)
+	elseif #parts > 0 then
+		parts[#parts] ..= ` since {ref}`
+	end
+	if #parts == 0 then
+		return `Same counts as {ref}`
+	end
+	return table.concat(parts, " · ")
 end
 
 -- Failures of any kind in a launch: failed, errored and timed out.
