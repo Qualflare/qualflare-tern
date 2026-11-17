@@ -302,7 +302,8 @@ function M.launches_table(items: Items, opts: { selected: string?, max: number?,
 	return out
 end
 
-function M.clusters_table(items: Items): Node
+-- `now` (Unix seconds) shows "Last seen" as an age instead of a date.
+function M.clusters_table(items: Items, now: number?): Node
 	local cols: { Col } = {
 		{ id = "severity", head = "Severity" },
 		{ id = "label", head = "Failure", grow = 1 },
@@ -319,7 +320,7 @@ function M.clusters_table(items: Items): Node
 				M.badge(c.severity),
 				str(c.label),
 				str(c.failureCount),
-				M.when(c.lastSeenAt),
+				if now then M.ago(c.lastSeenAt, now :: number) else M.when(c.lastSeenAt),
 				{ button = { text = "", icon = "open", act = "cluster=" .. str(c.id) } },
 			} :: { Cell }),
 		})

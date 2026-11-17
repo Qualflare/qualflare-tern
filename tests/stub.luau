@@ -236,7 +236,15 @@ tern = {
 					end
 				end
 			end
-			cb(res or { status = 1, stdout = "", stderr = "no stub for " .. key, timed_out = false }, nil)
+			local out = res or { status = 1, stdout = "", stderr = "no stub for " .. key, timed_out = false }
+			if S.defer then
+				-- held back until the test calls S.flush(), to model answers in flight
+				table.insert(S.deferred, function()
+					cb(out, nil)
+				end)
+			else
+				cb(out, nil)
+			end
 		end,
 	},
 	ui = ui,
@@ -327,7 +335,17 @@ function S.kind_list(n: any): string
 	return table.concat(out, " ")
 end
 
+-- Delivers held-back process answers in the order they were asked.
+function S.flush()
+	local q = S.deferred
+	S.deferred = {}
+	for _, f in q do
+		f()
+	end
+end
+
 function S.reset()
+	S.defer, S.deferred = false, {}
 	S.writes, S.toasts, S.opened, S.runs = {}, {}, {}, {}
 	S.timers, S.focused_panes = {}, {}
 end

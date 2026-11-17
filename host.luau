@@ -88,7 +88,7 @@ end
 
 -- Set by the block section below: refreshes open panes on a project after
 -- an upload to it.
-local on_upload: (identifier: string) -> () = function(_identifier: string) end
+local on_upload: (identifier: string, took_ms: number) -> () = function(_identifier: string, _took_ms: number) end
 
 -- `qf <id> collect …` finishing: remember the result for the status widget.
 local function record_upload(line: string, status: number, took_ms: number)
@@ -108,7 +108,7 @@ local function record_upload(line: string, status: number, took_ms: number)
 	})
 	pcall(tern.chrome.refresh)
 	if status == 0 then
-		on_upload(words[2])
+		on_upload(words[2], took_ms)
 	end
 end
 
@@ -306,6 +306,9 @@ type BlockState = {
 	req: number,
 	clusters: { any }?,
 	fresh: number?,
+	-- an upload from a terminal whose launch hasn't been picked out yet:
+	-- `base` the newest seq when it finished, `since` when it started (Unix s)
+	upload: { base: any, since: number, retried: boolean }?,
 }
 
 -- Whether the block's pane still exists (blocks have no close handler).
@@ -460,9 +463,40 @@ local function newest_seq(s: BlockState): any
 	return if launches and launches[1] then launches[1].seq else nil
 end
 
--- `upload`: the refresh follows an upload from a terminal, so a new newest
--- launch gets selected and marked; `retried`: this is the one look-again.
-local function refresh(s: BlockState, cx: BlockCx, upload: boolean?, retried: boolean?)
+local refresh: (s: BlockState, cx: BlockCx) -> ()
+
+-- After an upload, the first answer that has its launch selects and marks it.
+-- Kept as state, so any refresh (R, the timer, the retry) can finish it.
+local function pick_upload(s: BlockState, cx: BlockCx)
+	local up = s.upload
+	if up == nil then
+		s.fresh = nil -- an ordinary refresh clears the mark
+		return
+	end
+	local launches = s.launches
+	local newest = if launches then launches[1] else nil
+	local seq = newest_seq(s)
+	local created = if newest then views.epoch(newest.createdAt) else nil
+	-- New since the upload finished, or created while it ran (a refresh may
+	-- have listed it before collect returned).
+	if seq ~= nil and (seq ~= up.base or (created ~= nil and created >= up.since)) then
+		s.selected = seq
+		s.pinned = nil
+		s.fresh = seq
+		s.upload = nil
+	elseif not up.retried then
+		up.retried = true
+		tern.timer(UPLOAD_RETRY_MS, function()
+			if running(cx.pane) and s.upload == up then
+				refresh(s, cx)
+			end
+		end)
+	else
+		s.upload = nil
+	end
+end
+
+function refresh(s: BlockState, cx: BlockCx)
 	local id = s.identifier
 	if id == nil then
 		return
@@ -470,7 +504,6 @@ local function refresh(s: BlockState, cx: BlockCx, upload: boolean?, retried: bo
 	s.loading = true
 	s.req += 1
 	local req = s.req
-	local before = newest_seq(s)
 	qf.read({ id, "launches", "list" }, s.cwd, function(r)
 		if s.identifier ~= id or s.req ~= req then
 			return -- the project changed, or a newer request went out
@@ -482,20 +515,7 @@ local function refresh(s: BlockState, cx: BlockCx, upload: boolean?, retried: bo
 			s.error = nil
 			s.status = nil
 			s.refreshed = s.now
-			local newest = newest_seq(s)
-			if not upload then
-				s.fresh = nil
-			elseif newest ~= nil and newest ~= before then
-				s.selected = newest
-				s.pinned = nil
-				s.fresh = newest
-			elseif not retried then
-				tern.timer(UPLOAD_RETRY_MS, function()
-					if running(cx.pane) and s.identifier == id then
-						refresh(s, cx, true, true)
-					end
-				end)
-			end
+			pick_upload(s, cx)
 			if not has_seq(s.launches, s.selected) and not (s.pinned and s.pinned.seq == s.selected) then
 				pin_selected(s, cx)
 			end
@@ -508,12 +528,20 @@ local function refresh(s: BlockState, cx: BlockCx, upload: boolean?, retried: bo
 	end)
 end
 
-on_upload = function(identifier: string)
+-- Slack for clock differences between this machine and the server.
+local UPLOAD_SLACK_S = 30
+
+on_upload = function(identifier: string, took_ms: number)
 	for pane, b in live do
 		if not running(pane) then
 			live[pane] = nil
 		elseif b.s.identifier == identifier then
-			refresh(b.s, b.cx, true)
+			b.s.upload = {
+				base = newest_seq(b.s),
+				since = os.time() - took_ms // 1000 - UPLOAD_SLACK_S,
+				retried = false,
+			}
+			refresh(b.s, b.cx)
 		end
 	end
 end
@@ -614,6 +642,9 @@ local function set_project(s: BlockState, cx: BlockCx, id: string)
 	s.more = false
 	s.page = 1
 	s.refreshed = nil
+	s.clusters = nil
+	s.fresh = nil
+	s.upload = nil
 	refresh(s, cx)
 	schedule(s, cx)
 	cx:save()

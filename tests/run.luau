@@ -28,6 +28,19 @@ local function has(hay: string, needle: string)
 		error(`expected to find "{needle}" in: {hay}`, 2)
 	end
 end
+local function no(hay: string, needle: string)
+	if string.find(hay, needle, 1, true) then
+		error(`expected no "{needle}" in: {hay}`, 2)
+	end
+end
+
+local function st(over: any): any
+	local s: any = { identifier = "demo-app", projects = { "demo-app", "web" }, launches = nil, more = false, loading = false, now = 1763294400, menu_open = false, selected = nil }
+	for k, v in over do
+		s[k] = v
+	end
+	return s
+end
 
 local STATE = [[
 <!-- qualflare-test-state v:1 -->
@@ -763,6 +776,86 @@ test("v2: a pane saved by 0.2.0 restores", function()
 	has(S.text(B.view(s, cx).main), "8 of 120 failing")
 end)
 
+test("review2: pressing R while the upload refresh is in flight still marks the new launch", function()
+	plain_projects()
+	local B = S.blocks.launches
+	S.panes = { { pane = 81, title = "" } }
+	local cx = S.block_cx(81, nil)
+	local a = B.init(cx, { "demo-app" }, nil)
+	S.process["/bin/qf demo-app launches list"] = { status = 0, stdout = NEWER, stderr = "", timed_out = false }
+	S.defer = true
+	S.fire("command_finished", { pane = 9, line = "qf demo-app collect r.xml", status = 0, took_ms = 5 })
+	B.key(a, key("r"), cx)
+	S.flush()
+	S.defer = false
+	eq(a.selected, 43)
+	eq(a.fresh, 43)
+	S.panes = {}
+	S.process["/bin/qf demo-app launches list"] = { status = 0, stdout = LAUNCHES, stderr = "", timed_out = false }
+end)
+
+test("review2: a launch listed before collect finished still counts as the upload's", function()
+	plain_projects()
+	local B = S.blocks.launches
+	S.panes = { { pane = 82, title = "" } }
+	local now = os.time()
+	local just = os.date("!%Y-%m-%dT%H:%M:%SZ", now - 3)
+	local list = `\{"items":[\{"seq":43,"status":"passed","totalCount":1,"passedCount":1,"createdAt":"{just}"},\{"seq":42,"status":"failed","totalCount":1,"failedCount":1,"createdAt":"2026-01-01T00:00:00Z"}],"paging":\{}}`
+	S.process["/bin/qf demo-app launches list"] = { status = 0, stdout = list, stderr = "", timed_out = false }
+	local a = B.init(S.block_cx(82, nil), { "demo-app" }, nil)
+	eq(a.launches[1].seq, 43, "already listed")
+	S.fire("command_finished", { pane = 9, line = "qf demo-app collect r.xml", status = 0, took_ms = 8000 })
+	eq(a.selected, 43)
+	eq(a.fresh, 43)
+	S.panes = {}
+	S.process["/bin/qf demo-app launches list"] = { status = 0, stdout = LAUNCHES, stderr = "", timed_out = false }
+end)
+
+test("review2: what changed compares with the last run on the same branch and environment", function()
+	local launches = {
+		{ seq = 42, branch = "feat/checkout", environmentName = "Staging", totalCount = 10, failedCount = 4 },
+		{ seq = 41, branch = "main", environmentName = "Production", totalCount = 10, failedCount = 0 },
+		{ seq = 40, branch = "feat/checkout", environmentName = "Staging", totalCount = 10, failedCount = 1 },
+	}
+	local t = S.text(tab.view(st({ launches = launches })).main)
+	has(t, "3 more failing than #40")
+	no(t, "than #41")
+	local other = S.text(tab.view(st({ launches = { launches[1], launches[2] } })).main)
+	no(other, "than #41")
+	no(other, "Same counts")
+end)
+
+test("review2: where to look keeps clusters seen since the newest run, with ages", function()
+	local newest = { seq = 9, status = "failed", totalCount = 2, failedCount = 1, createdAt = "2026-11-15T12:00:00Z" }
+	local clusters = {
+		{ id = 1, label = "fresh one", lastSeenAt = "2026-11-15T12:05:00Z" },
+		{ id = 2, label = "old one", lastSeenAt = "2026-11-08T12:00:00Z" },
+	}
+	local now = views.epoch("2026-11-15T14:05:00Z") :: number
+	local t = S.text(tab.view(st({ launches = { newest }, clusters = clusters, now = now })).main)
+	has(t, "fresh one")
+	no(t, "old one")
+	has(t, "2 h ago")
+	no(S.text(tab.view(st({ launches = { newest }, clusters = { clusters[2] }, now = now })).main), "Where to look")
+end)
+
+test("review2: switching project drops the old project's clusters and mark", function()
+	plain_projects()
+	S.process[CLUSTERS_CMD] = { status = 0, stdout = FOUR_CLUSTERS, stderr = "", timed_out = false }
+	local B = S.blocks.launches
+	local cx = S.block_cx(83, nil)
+	local s = B.init(cx, { "demo-app" }, nil)
+	eq(#s.clusters, 3)
+	s.fresh = 42
+	S.defer = true
+	B.event(s, { ev = "change", id = "main.head.start.project", value = "web" }, cx)
+	eq(s.clusters, nil)
+	eq(s.fresh, nil)
+	S.flush()
+	S.defer = false
+	S.process[CLUSTERS_CMD] = nil
+end)
+
 test("Ctrl-C and signals don't get the upload prompt", function()
 	eq(detect.finished_normally(0), true)
 	eq(detect.finished_normally(1), true)
@@ -888,13 +981,6 @@ end)
 -- Qualflare tab page
 ---------------------------------------------------------------------------
 
-local function st(over: any): any
-	local s: any = { identifier = "demo-app", projects = { "demo-app", "web" }, launches = nil, more = false, loading = false, now = 1763294400, menu_open = false, selected = nil }
-	for k, v in over do
-		s[k] = v
-	end
-	return s
-end
 
 -- The first node in a view tree that `pred` accepts.
 local function find(n: any, pred: (any) -> boolean): any
@@ -917,11 +1003,6 @@ local function keyed(key: string): (any) -> boolean
 		return type(n.p) == "table" and n.p.key == key
 	end
 end
-local function no(hay: string, needle: string)
-	if string.find(hay, needle, 1, true) then
-		error(`expected no "{needle}" in: {hay}`, 2)
-	end
-end
 
 test("tab: launches page has head, verdict, change, trend, table and the selected card", function()
 	local launches = (tern.json.decode(LAUNCHES) :: any).items
@@ -930,7 +1011,7 @@ test("tab: launches page has head, verdict, change, trend, table and the selecte
 	has(t, "Qualflare")
 	has(t, "updated 1 min ago")
 	has(t, "8 of 120 failing")
-	has(t, "+2 tests · 8 more failing than #41")
+	no(t, "than #41") -- #41 is on another branch: no like-for-like comparison
 	no(S.kind_list(v.main), "stats")
 	has(S.kind_list(v.main), "chart")
 	has(t, "#" .. tostring(launches[2].seq))
@@ -995,7 +1076,7 @@ test("tab: the card has its status at the head and wraps its text", function()
 	local l = { seq = 5, status = "failed", environmentName = "Staging", totalCount = 10, passedCount = 9, failedCount = 1, framework = "junit", os = "darwin/arm64", aiSummary = '{"executiveSummary":"Checkout broke.","riskLevel":"low","riskJustification":"Only one test.","failingAreas":["checkout"],"recommendations":["Continue monitoring test results for any regressions in later runs."]}' }
 	local v = tab.view(st({ launches = { l } }))
 	local card = find(v.main, keyed("detail"))
-	eq(card.p.props["end"], "status")
+	eq(card.p.props["end"], "main.launches.detail.status", "end takes the badge's full id")
 	has(S.text(card.p.head), "#5 · Staging")
 	no(S.text(card), "no branch")
 	no(S.kind_list(card), "list")

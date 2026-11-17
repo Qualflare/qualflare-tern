@@ -163,8 +163,19 @@ local function overview(s: TabState, launches: { any }): Node
 			then "Run your tests, then press U to upload."
 			else `Run your tests and upload with qf {s.identifier or "<id>"} collect.`
 		table.insert(parts, ui.text({ ui.span(`No runs in {days} days. {how}`, "warning") }))
-	elseif #launches > 1 then
-		table.insert(parts, ui.text({ ui.span(views.change(newest, launches[2]), "muted") }))
+	else
+		-- Compare like with like: the last run on the same branch and environment.
+		local prev = nil
+		for i = 2, #launches do
+			local l = launches[i]
+			if str(l.branch) == str(newest.branch) and str(l.environmentName) == str(newest.environmentName) then
+				prev = l
+				break
+			end
+		end
+		if prev then
+			table.insert(parts, ui.text({ ui.span(views.change(newest, prev), "muted") }))
+		end
 	end
 
 	if #launches > 1 then
@@ -211,7 +222,8 @@ local function card(l: any, s: TabState): Node
 		end
 	end
 
-	-- Drawn at the card head's end (the card's `end` prop names it).
+	-- Drawn at the card head's end: the card's `end` prop names its full id
+	-- (main → launches row → detail card → status).
 	local status = ui.badge(str(l.status), views.tone(l.status))
 	status.p = status.p or {}
 	;(status.p :: any).key = "status"
@@ -254,7 +266,7 @@ local function card(l: any, s: TabState): Node
 			table.insert(head, v)
 		end
 	end
-	local c = ui.card(table.concat(head, " · "), body, { key = "detail", icon = "list-checks", ["end"] = "status" })
+	local c = ui.card(table.concat(head, " · "), body, { key = "detail", icon = "list-checks", ["end"] = "main.launches.detail.status" })
 	c.p = c.p or {}
 	;(c.p :: any).key = "detail"
 	;(c.p :: any).grow = 1
@@ -269,11 +281,22 @@ local function where_to_look(s: TabState, launches: { any }): Node?
 	if clusters == nil or #clusters == 0 or views.failed(launches[1]) == 0 then
 		return nil
 	end
+	-- Clusters last seen before the newest run aren't about it.
+	local since = views.epoch(launches[1].createdAt)
 	local top: { any } = {}
-	for i = 1, math.min(#clusters, 3) do
-		table.insert(top, clusters[i])
+	for _, c in clusters do
+		local seen = views.epoch(c.lastSeenAt)
+		if since == nil or seen == nil or seen >= since then
+			table.insert(top, c)
+		end
+		if #top == 3 then
+			break
+		end
 	end
-	return ui.section("Where to look", { views.clusters_table(top) })
+	if #top == 0 then
+		return nil
+	end
+	return ui.section("Where to look", { views.clusters_table(top, s.now) })
 end
 
 local function empty(props: { [string]: any }, buttons: { Node }?): Node
