@@ -211,7 +211,7 @@ test("block loads projects and launches through qf", function()
 	eq(B.title(s), "Qualflare · demo-app")
 	eq(#s.projects, 2)
 	eq(S.kv.known_identifiers[2], "web")
-	has(S.text(B.view(s, cx).main), "Pass rate")
+	has(S.text(B.view(s, cx).main), "8 of 120 failing")
 	B.event(s, { ev = "activate", item = "launch=42" }, cx)
 	eq(S.opened[#S.opened], "https://app.qualflare.com/project/demo-app/launches?p=launch&p.seq=42&src=tern")
 	B.event(s, { ev = "select", item = "launch=41" }, cx)
@@ -782,22 +782,129 @@ local function st(over: any): any
 	return s
 end
 
-test("tab: launches page has head, stats, table and the selected card", function()
+-- The first node in a view tree that `pred` accepts.
+local function find(n: any, pred: (any) -> boolean): any
+	if type(n) ~= "table" then
+		return nil
+	end
+	if type(n.k) == "string" and pred(n) then
+		return n
+	end
+	for _, v in n do
+		local got = find(v, pred)
+		if got then
+			return got
+		end
+	end
+	return nil
+end
+local function keyed(key: string): (any) -> boolean
+	return function(n)
+		return type(n.p) == "table" and n.p.key == key
+	end
+end
+local function no(hay: string, needle: string)
+	if string.find(hay, needle, 1, true) then
+		error(`expected no "{needle}" in: {hay}`, 2)
+	end
+end
+
+test("tab: launches page has head, verdict, change, trend, table and the selected card", function()
 	local launches = (tern.json.decode(LAUNCHES) :: any).items
 	local v = tab.view(st({ launches = launches, selected = launches[2].seq, refreshed = 1763294400 - 60 }))
 	local t = S.text(v.main)
 	has(t, "Qualflare")
-	has(t, "Pass rate")
-	has(t, "Failed")
-	has(t, "Flaky")
-	has(t, "Last run")
 	has(t, "updated 1 min ago")
+	has(t, "8 of 120 failing")
+	has(t, "+2 tests · 8 more failing than #41")
+	no(S.kind_list(v.main), "stats")
+	has(S.kind_list(v.main), "chart")
 	has(t, "#" .. tostring(launches[2].seq))
 	has(t, "Open on website")
 	has(S.kind_list(v.main), "select")
 	has(S.text(v.dock), "R refresh")
 	eq(tab.selected_launch(st({ launches = launches, selected = 41 })).seq, 41)
 	eq(tab.selected_launch(st({ launches = launches })).seq, 42)
+	eq(find(v.main, keyed("launches")).p.wrap, true, "table and card wrap in a narrow pane")
+end)
+
+test("tab: verdict reads failing, passed and other states", function()
+	local launches = (tern.json.decode(LAUNCHES) :: any).items
+	local now = 1763294400
+	local f = tab.verdict(launches[1], now)
+	eq(f.tone, "error")
+	has(f.text, "✗ 8 of 120 failing · feat/checkout · staging · ")
+	local p = tab.verdict(launches[2], now)
+	eq(p.tone, "success")
+	has(p.text, "✓ Latest run passed · 118 tests · staging · ")
+	no(p.text, "no branch")
+	has(tab.verdict({ status = "running" }, now).text, "● Latest run running")
+	has(tab.verdict({ status = "passed", totalCount = 0 }, now).text, "Latest run passed")
+	has(tab.verdict({}, now).text, "Latest run")
+end)
+
+test("tab: one launch has no trend and no change line", function()
+	local launches = (tern.json.decode(LAUNCHES) :: any).items
+	local v = tab.view(st({ launches = { launches[2] } }))
+	no(S.kind_list(v.main), "chart")
+	no(S.text(v.main), "than #")
+	no(S.text(v.main), "Same counts")
+end)
+
+test("tab: trend bars run oldest to newest, red where runs failed", function()
+	local launches = (tern.json.decode(LAUNCHES) :: any).items
+	local chart = find(tab.view(st({ launches = launches })).main, function(n)
+		return n.k == "chart"
+	end)
+	eq(chart.p.kind, "bars")
+	eq(#chart.p.series, 2)
+	has(chart.p.series[1].title, "#41")
+	eq(chart.p.series[1].value, 100)
+	eq(chart.p.series[2].tone, "error")
+	eq(chart.p.series[2].value, 92) -- 110 of 120
+	-- a launch with no tests counts as 0, not NaN
+	local zero = find(tab.view(st({ launches = { { seq = 2, totalCount = 0 }, { seq = 1 } } })).main, function(n)
+		return n.k == "chart"
+	end)
+	eq(zero.p.series[1].value, 0)
+end)
+
+test("tab: an old newest run says how long ago the last run was", function()
+	local launches = (tern.json.decode(LAUNCHES) :: any).items
+	local newest = views.epoch(launches[1].createdAt) :: number
+	local t = S.text(tab.view(st({ launches = launches, now = newest + 8 * 86400 + 60 })).main)
+	has(t, "No runs in 8 days")
+	no(S.text(tab.view(st({ launches = launches })).main), "No runs in")
+end)
+
+test("tab: the card has its status at the head and wraps its text", function()
+	local l = { seq = 5, status = "failed", environmentName = "Staging", totalCount = 10, passedCount = 9, failedCount = 1, framework = "junit", os = "darwin/arm64", aiSummary = '{"executiveSummary":"Checkout broke.","riskLevel":"low","riskJustification":"Only one test.","failingAreas":["checkout"],"recommendations":["Continue monitoring test results for any regressions in later runs."]}' }
+	local v = tab.view(st({ launches = { l } }))
+	local card = find(v.main, keyed("detail"))
+	eq(card.p.props["end"], "status")
+	has(S.text(card.p.head), "#5 · Staging")
+	no(S.text(card), "no branch")
+	no(S.kind_list(card), "list")
+	no(S.kind_list(card), "test_summary")
+	has(S.text(card), "Continue monitoring test results for any regressions in later runs.")
+	has(S.text(card), "junit · darwin/arm64")
+	has(S.text(card), "Only one test.")
+end)
+
+test("tab: where to look lists clusters only when the newest run failed", function()
+	local launches = (tern.json.decode(LAUNCHES) :: any).items
+	local clusters = (tern.json.decode(CLUSTERS) :: any).items
+	local t = S.text(tab.view(st({ launches = launches, clusters = clusters })).main)
+	has(t, "Where to look")
+	has(t, "TimeoutError waiting for #pay-button")
+	no(S.text(tab.view(st({ launches = { launches[2] }, clusters = clusters })).main), "Where to look")
+	no(S.text(tab.view(st({ launches = launches })).main), "Where to look")
+end)
+
+test("tab: a launch just uploaded is marked new", function()
+	local launches = (tern.json.decode(LAUNCHES) :: any).items
+	has(S.text(tab.view(st({ launches = launches, fresh = 42 })).main), "new")
+	no(S.text(tab.view(st({ launches = launches, fresh = 41 })).main), "| new")
 end)
 
 test("tab: Fix with omp shows only on failed launches", function()
@@ -823,7 +930,7 @@ end)
 test("tab: empty launches shows the empty state", function()
 	local t = S.text(tab.view(st({ launches = {} })).main)
 	has(t, "No launches yet")
-	assert(not string.find(t, "Pass rate", 1, true), "no stats strip when empty")
+	no(t, "Latest run")
 end)
 
 test("tab: loading, error and no-project states", function()
@@ -837,7 +944,7 @@ test("tab: loading, error and no-project states", function()
 	has(S.text(tab.view(none).main), "No Qualflare project here")
 	-- stale data stays on screen while a refresh runs
 	local launches = (tern.json.decode(LAUNCHES) :: any).items
-	has(S.text(tab.view(st({ loading = true, launches = launches })).main), "Pass rate")
+	has(S.text(tab.view(st({ loading = true, launches = launches })).main), "8 of 120 failing")
 end)
 
 print(`{passed} passed, {failed} failed, {pending} pending`)

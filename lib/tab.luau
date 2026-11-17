@@ -27,8 +27,12 @@ export type TabState = {
 	menu_active: string?,
 	-- an older launch fetched on its own for the card
 	pinned: any?,
-	-- the project's folder; nil when this tab's folder isn't that project
+	-- the project's folder; nil when this pane's folder isn't that project
 	root: string?,
+	-- the newest failure clusters, fetched when the newest launch failed
+	clusters: { any }?,
+	-- the seq of a launch an upload from a terminal just added
+	fresh: number?,
 }
 
 local RISK_TONE: { [string]: string } = {
@@ -74,7 +78,7 @@ local function hand_off_reason(s: TabState): string | boolean
 		return true
 	end
 	if s.root == nil then
-		return "Open this tab from a folder of the project to upload or fix"
+		return "Open this pane from a folder of the project to upload or fix"
 	end
 	return false
 end
@@ -104,65 +108,124 @@ local function head(s: TabState): Node
 	})
 end
 
-local function stats(l: any, now: number): Node
-	local total = num(l.totalCount)
-	local rate = if total > 0 then `{math.floor(num(l.passedCount) / total * 100 + 0.5)}%` else "–"
+local STALE_DAYS = 7
+local TREND_MAX = 20
+
+-- The one-line answer to "is my latest run OK?" for the newest launch.
+function M.verdict(l: any, now: number): { tone: string, text: string }
 	local failed = views.failed(l)
-	local flaky = num(l.flakyCount)
-	local node = ui.stats({
-		{ label = "Pass rate", value = rate, sub = `#{str(l.seq)}` },
-		{ label = "Failed", value = tostring(failed), tone = if failed > 0 then "error" else nil },
-		{ label = "Flaky", value = tostring(flaky), tone = if flaky > 0 then "warning" else nil },
-		{ label = "Last run", value = views.ago(l.createdAt, now) },
-	})
-	node.p = node.p or {}
-	;(node.p :: any).key = "stats"
-	return node
+	local total = num(l.totalCount)
+	local parts: { string } = {}
+	local tone
+	if failed > 0 then
+		tone = "error"
+		table.insert(parts, `✗ {failed} of {total} failing`)
+		table.insert(parts, str(l.branch))
+	elseif str(l.status) == "passed" then
+		tone = "success"
+		table.insert(parts, "✓ Latest run passed")
+		table.insert(parts, if total > 0 then `{total} tests` else "")
+	else
+		tone = "info"
+		local status = str(l.status)
+		table.insert(parts, if status ~= "" then `● Latest run {status}` else "● Latest run")
+		table.insert(parts, str(l.branch))
+	end
+	table.insert(parts, str(l.environmentName))
+	table.insert(parts, views.ago(l.createdAt, now))
+	local shown: { string } = {}
+	for _, p in parts do
+		if p ~= "" then
+			table.insert(shown, p)
+		end
+	end
+	return { tone = tone, text = table.concat(shown, " · ") }
 end
 
-local function bullet_list(items: { string }): Node
-	local rows: { Item } = {}
-	for _, t in items do
-		table.insert(rows, { label = t })
+local function pass_rate(l: any): number
+	local total = num(l.totalCount)
+	return if total > 0 then math.floor(num(l.passedCount) / total * 100 + 0.5) else 0
+end
+
+-- Verdict, then staleness or what changed, then the trend of recent runs.
+local function overview(s: TabState, launches: { any }): Node
+	local newest = launches[1]
+	local v = M.verdict(newest, s.now)
+	local head: { Node } = { ui.text({ ui.span(v.text, v.tone) }) }
+	if s.fresh ~= nil and s.fresh == newest.seq then
+		table.insert(head, ui.badge("new", "accent"))
 	end
-	return ui.list(rows)
+	local parts: { Node } = { ui.node("row", { key = "verdict", gap = "sm", align = "center", wrap = true }, head) }
+
+	local days = views.days(newest.createdAt, s.now)
+	if days ~= nil and days > STALE_DAYS then
+		local how = if hand_off_reason(s) == false
+			then "Run your tests, then press U to upload."
+			else `Run your tests and upload with qf {s.identifier or "<id>"} collect.`
+		table.insert(parts, ui.text({ ui.span(`No runs in {days} days. {how}`, "warning") }))
+	elseif #launches > 1 then
+		table.insert(parts, ui.text({ ui.span(views.change(newest, launches[2]), "muted") }))
+	end
+
+	if #launches > 1 then
+		local series = {}
+		local n = math.min(#launches, TREND_MAX)
+		for i = n, 1, -1 do
+			local l = launches[i]
+			local failed = views.failed(l)
+			table.insert(series, {
+				value = pass_rate(l),
+				label = `#{str(l.seq)}`,
+				title = `#{str(l.seq)} · {str(l.status)} · {num(l.passedCount)} passed, {failed} failed`,
+				tone = if failed > 0 then "error" else "success",
+			})
+		end
+		table.insert(parts, ui.node("chart", {
+			key = "trend",
+			kind = "bars",
+			size = "sm",
+			min = 0,
+			max = 100,
+			series = series,
+			summary = { ui.span(`Pass rate, last {n} runs`, "muted") },
+		}))
+	end
+	return ui.node("col", { key = "overview", gap = "sm" }, parts)
+end
+
+-- Wrapping lines with bullets: list rows never wrap, and these are sentences.
+local function bullet_list(items: { string }): Node
+	local rows: { Node } = {}
+	for _, t in items do
+		table.insert(rows, ui.text({ ui.span("• ", "muted"), ui.span(t) }))
+	end
+	return ui.node("col", { gap = "xs" }, rows)
 end
 
 local function card(l: any, s: TabState): Node
 	local failed = views.failed(l)
-	local facts: { { Spans } } = {}
-	local function fact(label: string, value: any)
-		local v = str(value)
+	local facts: { string } = {}
+	for _, v in { str(l.framework), str(l.os), str(l.browser), string.sub(str(l.commit), 1, 8), str(l.milestoneName), views.when(l.createdAt) } do
 		if v ~= "" then
-			table.insert(facts, { label, v })
+			table.insert(facts, v)
 		end
 	end
-	fact("Framework", l.framework)
-	fact("OS", l.os)
-	fact("Browser", l.browser)
-	local commit = str(l.commit)
-	fact("Commit", string.sub(commit, 1, 8))
-	fact("Milestone", l.milestoneName)
-	fact("Created", views.when(l.createdAt))
 
-	local body: { Node } = {
-		ui.badge(str(l.status), views.tone(l.status)),
-		ui.test_summary(num(l.passedCount), failed, num(l.skippedCount), nil),
-	}
-	if #facts > 0 then
-		table.insert(body, ui.kv(facts))
-	end
+	-- Drawn at the card head's end (the card's `end` prop names it).
+	local status = ui.badge(str(l.status), views.tone(l.status))
+	status.p = status.p or {}
+	;(status.p :: any).key = "status"
+	local body: { Node } = { status }
 	local sum = views.summary(l)
 	if sum then
 		local summary = sum :: views.Summary
 		table.insert(body, ui.text(summary.text))
 		if summary.risk then
 			local risk = summary.risk :: string
-			local line: { Node } = { ui.badge(`Risk: {risk}`, RISK_TONE[risk] or "muted") }
+			table.insert(body, ui.node("row", { gap = "sm" }, { ui.badge(`Risk: {risk}`, RISK_TONE[risk] or "muted") }))
 			if summary.why then
-				table.insert(line, ui.text({ ui.span(summary.why :: string, "muted") }))
+				table.insert(body, ui.text(summary.why :: string))
 			end
-			table.insert(body, ui.node("row", { gap = "sm", align = "center" }, line))
 		end
 		if #summary.areas > 0 then
 			table.insert(body, ui.section("Failing areas", { bullet_list(summary.areas) }))
@@ -170,6 +233,12 @@ local function card(l: any, s: TabState): Node
 		if #summary.recommendations > 0 then
 			table.insert(body, ui.section("Recommendations", { bullet_list(summary.recommendations) }))
 		end
+	else
+		local counts = `{num(l.passedCount)} passed · {failed} failed · {num(l.skippedCount)} skipped. No AI summary yet.`
+		table.insert(body, ui.text({ ui.span(counts, "muted") }))
+	end
+	if #facts > 0 then
+		table.insert(body, ui.text({ ui.span(table.concat(facts, " · "), "muted") }))
 	end
 	local buttons: { Node } = {
 		ui.button("Open on website", { key = "open", variant = "primary", icon = "open", keys = { "enter" }, actions = { click = "open" } }),
@@ -177,16 +246,34 @@ local function card(l: any, s: TabState): Node
 	if failed > 0 then
 		table.insert(buttons, ui.button("Fix with omp", { key = "fix", icon = "app-omp", disabled = hand_off_reason(s), actions = { click = "fix" } }))
 	end
-	table.insert(body, ui.node("row", { gap = "sm" }, buttons))
+	table.insert(body, ui.node("row", { gap = "sm", wrap = true }, buttons))
 
-	local env = str(l.environmentName)
-	local branch = str(l.branch)
-	local title = `#{str(l.seq)} · {if branch ~= "" then branch else "no branch"}{if env ~= "" then " · " .. env else ""}`
-	local c = ui.card(title, body, { key = "detail", icon = "list-checks" })
+	local head: { string } = { `#{str(l.seq)}` }
+	for _, v in { str(l.branch), str(l.environmentName) } do
+		if v ~= "" then
+			table.insert(head, v)
+		end
+	end
+	local c = ui.card(table.concat(head, " · "), body, { key = "detail", icon = "list-checks", ["end"] = "status" })
 	c.p = c.p or {}
+	;(c.p :: any).key = "detail"
+	;(c.p :: any).grow = 1
 	;(c.p :: any).min = { w = "36ch" }
-	;(c.p :: any).max = { w = "48ch" }
+	;(c.p :: any).max = { w = "60ch" }
 	return c
+end
+
+-- The newest failure clusters, when the newest run failed.
+local function where_to_look(s: TabState, launches: { any }): Node?
+	local clusters = s.clusters
+	if clusters == nil or #clusters == 0 or views.failed(launches[1]) == 0 then
+		return nil
+	end
+	local top: { any } = {}
+	for i = 1, math.min(#clusters, 3) do
+		table.insert(top, clusters[i])
+	end
+	return ui.section("Where to look", { views.clusters_table(top) })
 end
 
 local function empty(props: { [string]: any }, buttons: { Node }?): Node
@@ -231,18 +318,23 @@ function M.view(s: TabState): BlockView
 		}))
 	else
 		local l = M.selected_launch(s)
-		table.insert(parts, stats(launches[1], s.now))
+		table.insert(parts, overview(s, launches))
 		local left: { Node } = {
 			views.launches_table(launches, { selected = if l then `launch={str(l.seq)}` else nil, now = s.now, max = 200, buttons = false }),
 		}
 		if s.more then
 			table.insert(left, ui.button("Show more", { key = "more", variant = "quiet", size = "sm", busy = s.loading, actions = { click = "more" } }))
 		end
-		local row: { Node } = { ui.node("col", { key = "list", gap = "sm", grow = 1 }, left) }
+		local row: { Node } = { ui.node("col", { key = "list", gap = "sm", grow = 2, min = { w = "44ch" } }, left) }
 		if l then
 			table.insert(row, card(l, s))
 		end
-		table.insert(parts, ui.node("row", { key = "launches", gap = "lg", align = "start" }, row))
+		-- wrap: in a narrow pane the card drops under the table
+		table.insert(parts, ui.node("row", { key = "launches", gap = "lg", align = "start", wrap = true }, row))
+		local look = where_to_look(s, launches)
+		if look then
+			table.insert(parts, look)
+		end
 		if s.error then
 			-- A refresh failed but older data is still worth showing.
 			table.insert(parts, 2, ui.text({ ui.span(s.error :: string, "error") }))

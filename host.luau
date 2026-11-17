@@ -297,6 +297,8 @@ type BlockState = {
 	timer: TimerHandle?,
 	-- bumped per qf list request; older answers are dropped
 	req: number,
+	clusters: { any }?,
+	fresh: number?,
 }
 
 -- Whether the block's pane still exists (blocks have no close handler).
