@@ -86,6 +86,10 @@ local function offer_upload(ev: { pane: number }, p: Pending, cx: EffectCx)
 	end)
 end
 
+-- Set by the block section below: refreshes open panes on a project after
+-- an upload to it.
+local on_upload: (identifier: string) -> () = function(_identifier: string) end
+
 -- `qf <id> collect …` finishing: remember the result for the status widget.
 local function record_upload(line: string, status: number, took_ms: number)
 	local words = detect.strip_wrappers(detect.words(line))
@@ -103,6 +107,9 @@ local function record_upload(line: string, status: number, took_ms: number)
 		took_ms = took_ms,
 	})
 	pcall(tern.chrome.refresh)
+	if status == 0 then
+		on_upload(words[2])
+	end
 end
 
 tern.on("command_finished", function(ev: { pane: number, line: string, status: number, took_ms: number }, cx: EffectCx)
@@ -317,6 +324,12 @@ local function is_identifier(line: string): boolean
 end
 
 local REFRESH_MS = 60000
+-- An upload's launch may not be listed at once; look again once after this.
+local UPLOAD_RETRY_MS = 5000
+local CLUSTERS_SHOWN = 3
+
+-- Open Qualflare panes by pane id, for refreshing after uploads.
+local live: { [number]: { s: BlockState, cx: BlockCx } } = {}
 
 local function launch_seq(item: any): number?
 	if type(item) ~= "string" then
@@ -336,6 +349,13 @@ local function has_seq(launches: { any }?, seq: number?): boolean
 		end
 	end
 	return false
+end
+
+local function cluster_id(item: any): string?
+	if type(item) ~= "string" then
+		return nil
+	end
+	return string.match(item, "^cluster=(.+)$")
 end
 
 local function seqs_of(list: { any }): { [any]: boolean }
@@ -407,7 +427,42 @@ local function pin_selected(s: BlockState, cx: BlockCx)
 	end)
 end
 
-local function refresh(s: BlockState, cx: BlockCx)
+-- The newest failure clusters, only worth fetching when the newest launch
+-- failed. A failed call just leaves them out.
+local function load_clusters(s: BlockState, cx: BlockCx)
+	local id = s.identifier
+	local launches = s.launches
+	if id == nil or launches == nil or #launches == 0 or views.failed(launches[1]) == 0 then
+		s.clusters = nil
+		return
+	end
+	local req = s.req
+	qf.read({ id :: string, "clusters", "list", "--sort-by", "lastSeenAt", "--sort-desc" }, s.cwd, function(r)
+		if s.identifier ~= id or s.req ~= req then
+			return
+		end
+		local items = if r.ok then views.items(r.data) else nil
+		if items then
+			local top: { any } = {}
+			for i = 1, math.min(#items, CLUSTERS_SHOWN) do
+				table.insert(top, items[i])
+			end
+			s.clusters = top
+		else
+			s.clusters = nil
+		end
+		cx:render()
+	end)
+end
+
+local function newest_seq(s: BlockState): any
+	local launches = s.launches
+	return if launches and launches[1] then launches[1].seq else nil
+end
+
+-- `upload`: the refresh follows an upload from a terminal, so a new newest
+-- launch gets selected and marked; `retried`: this is the one look-again.
+local function refresh(s: BlockState, cx: BlockCx, upload: boolean?, retried: boolean?)
 	local id = s.identifier
 	if id == nil then
 		return
@@ -415,6 +470,7 @@ local function refresh(s: BlockState, cx: BlockCx)
 	s.loading = true
 	s.req += 1
 	local req = s.req
+	local before = newest_seq(s)
 	qf.read({ id, "launches", "list" }, s.cwd, function(r)
 		if s.identifier ~= id or s.req ~= req then
 			return -- the project changed, or a newer request went out
@@ -426,15 +482,40 @@ local function refresh(s: BlockState, cx: BlockCx)
 			s.error = nil
 			s.status = nil
 			s.refreshed = s.now
+			local newest = newest_seq(s)
+			if not upload then
+				s.fresh = nil
+			elseif newest ~= nil and newest ~= before then
+				s.selected = newest
+				s.pinned = nil
+				s.fresh = newest
+			elseif not retried then
+				tern.timer(UPLOAD_RETRY_MS, function()
+					if running(cx.pane) and s.identifier == id then
+						refresh(s, cx, true, true)
+					end
+				end)
+			end
 			if not has_seq(s.launches, s.selected) and not (s.pinned and s.pinned.seq == s.selected) then
 				pin_selected(s, cx)
 			end
+			load_clusters(s, cx)
 		else
 			s.error = r.err
 			s.status = r.status
 		end
 		cx:render()
 	end)
+end
+
+on_upload = function(identifier: string)
+	for pane, b in live do
+		if not running(pane) then
+			live[pane] = nil
+		elseif b.s.identifier == identifier then
+			refresh(b.s, b.cx, true)
+		end
+	end
 end
 
 local function load_more(s: BlockState, cx: BlockCx)
@@ -466,7 +547,8 @@ local function schedule(s: BlockState, cx: BlockCx)
 	end
 	s.timer = tern.timer(REFRESH_MS, function()
 		if not running(cx.pane) then
-			return -- the tab closed
+			live[cx.pane] = nil
+			return -- the pane closed
 		end
 		refresh(s, cx)
 		schedule(s, cx)
@@ -573,7 +655,7 @@ local function hand_off(s: BlockState, cx: BlockCx, action: string)
 		return
 	end
 	if s.root == nil then
-		cx:toast("info", `{id} isn't in this tab's folder`, "Open the tab from a folder of that project to upload or fix.")
+		cx:toast("info", `{id} isn't in this pane's folder`, "Open the pane from a folder of that project to upload or fix.")
 		return
 	end
 	cx:open(links.bridge(action, { id = id :: string, root = s.root :: string }))
@@ -615,6 +697,7 @@ tern.block.define("launches", {
 			schedule(s, cx)
 		end
 		load_projects(s, cx)
+		live[cx.pane] = { s = s, cx = cx }
 		return s
 	end,
 	title = function(s: BlockState): string?
@@ -636,6 +719,8 @@ tern.block.define("launches", {
 		elseif ev.ev == "activate" and launch_seq(ev.item) then
 			s.selected = launch_seq(ev.item)
 			open_selected(s, cx, s.selected)
+		elseif ev.ev == "activate" and cluster_id(ev.item) and s.identifier then
+			cx:open(views.own(views.cluster_url(s.identifier :: string, cluster_id(ev.item))))
 		elseif ev.ev == "action" then
 			local act = ev.act
 			if act == "open" then
@@ -646,6 +731,8 @@ tern.block.define("launches", {
 				load_more(s, cx)
 			elseif act == "upload" or act == "fix" then
 				hand_off(s, cx, act)
+			elseif cluster_id(act) and s.identifier then
+				cx:open(views.own(views.cluster_url(s.identifier :: string, cluster_id(act))))
 			end
 		end
 	end,

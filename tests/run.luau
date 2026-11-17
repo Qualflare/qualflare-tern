@@ -649,6 +649,120 @@ local SHOULD_NOT = {
 	"qf demo collect x.xml",
 }
 
+---------------------------------------------------------------------------
+-- Qualflare pane v2: clusters and live refresh
+---------------------------------------------------------------------------
+
+local CLUSTERS_CMD = "/bin/qf demo-app clusters list --sort-by lastSeenAt --sort-desc"
+local FOUR_CLUSTERS = '{"items":[{"id":1,"label":"a"},{"id":2,"label":"b"},{"id":3,"label":"c"},{"id":4,"label":"d"}],"paging":{}}'
+local NEWER = '{"items":[{"seq":43,"status":"passed","totalCount":120,"passedCount":120}, {"seq":42,"status":"failed","totalCount":120,"passedCount":110,"failedCount":8}],"paging":{"page":1,"pages":1}}'
+
+local function ran(cmd: string): number
+	local n = 0
+	for _, argv in S.runs do
+		if table.concat(argv, " ") == cmd then
+			n += 1
+		end
+	end
+	return n
+end
+
+test("v2: a failing newest launch fetches the three newest clusters", function()
+	plain_projects()
+	S.process[CLUSTERS_CMD] = { status = 0, stdout = FOUR_CLUSTERS, stderr = "", timed_out = false }
+	local s = S.blocks.launches.init(S.block_cx(41, nil), { "demo-app" }, nil)
+	eq(ran(CLUSTERS_CMD), 1)
+	eq(#s.clusters, 3)
+	eq(s.clusters[1].label, "a")
+	S.process[CLUSTERS_CMD] = nil
+end)
+
+test("v2: a passing newest launch skips clusters", function()
+	plain_projects()
+	S.process["/bin/qf ok launches list"] = { status = 0, stdout = '{"items":[{"seq":2,"status":"passed","totalCount":1,"passedCount":1}],"paging":{}}', stderr = "", timed_out = false }
+	local s = S.blocks.launches.init(S.block_cx(42, nil), { "ok" }, nil)
+	eq(ran("/bin/qf ok clusters list --sort-by lastSeenAt --sort-desc"), 0)
+	eq(s.clusters, nil)
+end)
+
+test("v2: a failed clusters call hides them without an error", function()
+	plain_projects()
+	S.process[CLUSTERS_CMD] = { status = 3, stdout = "", stderr = "no token loaded", timed_out = false }
+	local s = S.blocks.launches.init(S.block_cx(43, nil), { "demo-app" }, nil)
+	eq(s.clusters, nil)
+	eq(s.error, nil)
+	eq(#s.launches, 2)
+	S.process[CLUSTERS_CMD] = { status = 0, stdout = "not json", stderr = "", timed_out = false }
+	S.blocks.launches.key(s, key("r"), S.block_cx(43, nil))
+	eq(s.clusters, nil)
+	S.process[CLUSTERS_CMD] = nil
+end)
+
+test("v2: a cluster row opens the cluster on the website", function()
+	plain_projects()
+	local B = S.blocks.launches
+	local cx = S.block_cx(44, nil)
+	local s = B.init(cx, { "demo-app" }, nil)
+	B.event(s, { ev = "activate", item = "cluster=7" }, cx)
+	eq(S.opened[#S.opened], "https://app.qualflare.com/project/demo-app/clusters/7?src=tern")
+	B.event(s, { ev = "action", act = "cluster=8" }, cx)
+	eq(S.opened[#S.opened], "https://app.qualflare.com/project/demo-app/clusters/8?src=tern")
+	eq(s.selected, nil, "a cluster isn't a launch selection")
+end)
+
+test("v2: an upload refreshes open panes on that project only, and marks the new launch", function()
+	plain_projects()
+	local B = S.blocks.launches
+	S.panes = { { pane = 51, title = "" }, { pane = 52, title = "" } }
+	local a = B.init(S.block_cx(51, nil), { "demo-app" }, nil)
+	local b = B.init(S.block_cx(52, nil), { "web" }, nil)
+	local closed = B.init(S.block_cx(53, nil), { "demo-app" }, nil)
+	S.process["/bin/qf demo-app launches list"] = { status = 0, stdout = NEWER, stderr = "", timed_out = false }
+	local web_runs = ran("/bin/qf web launches list")
+	S.fire("command_finished", { pane = 9, line = "qf demo-app collect r.xml", status = 1, took_ms = 5 })
+	eq(a.launches[1].seq, 42, "a failed upload refreshes nothing")
+	S.fire("command_finished", { pane = 9, line = "qf demo-app collect r.xml", status = 0, took_ms = 5 })
+	eq(a.launches[1].seq, 43)
+	eq(a.selected, 43)
+	eq(a.fresh, 43)
+	has(S.text(B.view(a, S.block_cx(51, nil)).main), "new")
+	eq(b.launches[1].seq, 42)
+	eq(ran("/bin/qf web launches list"), web_runs, "another project's pane isn't refreshed")
+	eq(closed.launches[1].seq, 42, "a closed pane isn't refreshed")
+	B.key(a, key("r"), S.block_cx(51, nil))
+	eq(a.fresh, nil, "an ordinary refresh clears the mark")
+	S.panes = {}
+	S.process["/bin/qf demo-app launches list"] = { status = 0, stdout = LAUNCHES, stderr = "", timed_out = false }
+end)
+
+test("v2: an upload not listed yet is retried once", function()
+	plain_projects()
+	local B = S.blocks.launches
+	S.panes = { { pane = 61, title = "" } }
+	local a = B.init(S.block_cx(61, nil), { "demo-app" }, nil)
+	local timers = #S.timers
+	S.fire("command_finished", { pane = 9, line = "qf demo-app collect r.xml", status = 0, took_ms = 5 })
+	eq(a.fresh, nil)
+	eq(#S.timers, timers + 1, "one retry scheduled")
+	S.process["/bin/qf demo-app launches list"] = { status = 0, stdout = NEWER, stderr = "", timed_out = false }
+	S.timers[#S.timers].fn()
+	eq(a.fresh, 43)
+	eq(a.selected, 43)
+	eq(#S.timers, timers + 1, "no second retry")
+	S.panes = {}
+	S.process["/bin/qf demo-app launches list"] = { status = 0, stdout = LAUNCHES, stderr = "", timed_out = false }
+end)
+
+test("v2: a pane saved by 0.2.0 restores", function()
+	plain_projects()
+	local B = S.blocks.launches
+	local cx = S.block_cx(71, nil)
+	local launches = (tern.json.decode(LAUNCHES) :: any).items
+	local s = B.init(cx, { "demo-app" }, { identifier = "demo-app", launches = launches, selected = 41, refreshed = 1 })
+	eq(s.selected, 41)
+	has(S.text(B.view(s, cx).main), "8 of 120 failing")
+end)
+
 test("Ctrl-C and signals don't get the upload prompt", function()
 	eq(detect.finished_normally(0), true)
 	eq(detect.finished_normally(1), true)
